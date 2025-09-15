@@ -1,0 +1,46 @@
+{
+  "gaming": {
+    "StopServicesPre": [
+      "SQLSERVERAGENT",
+      "MSSQLSERVER"
+    ],
+    "KillProcesses": [
+      "chrome*",
+      "Code*",
+      "node*",
+      "dotnet*",
+      "msbuild*",
+      "devenv*"
+    ],
+    "StartServicesPost": [
+      "MSSQLSERVER",
+      "SQLSERVERAGENT"
+    ],
+    "LaunchAppsPost": [
+      "Start-Process steam://open/bigpicture"
+    ]
+  },
+  "dev": {
+    "StopServicesPre": [],
+    "KillProcesses": [
+      "steam*",
+      "battle.net*",
+      "epic*",
+      "Overwolf*"
+    ],
+    "StartServicesPost": [],
+    "LaunchAppsPost": [
+      "Start-Process code",
+      "Start-Process powershell -ArgumentList '-NoExit -Command cd \"${env:USERPROFILE}\\source\"'"
+    ]
+  },
+  "normal": {
+    "StopServicesPre": [],
+    "KillProcesses": [
+      "Overwolf*",
+      "Discord*"
+    ],
+    "StartServicesPost": [],
+    "LaunchAppsPost": []
+  }
+}

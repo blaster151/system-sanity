@@ -1,0 +1,70 @@
+0) I like the process list here. What is on the "default junk-kill list" though or where is that list defined?
+No profile specified; using default junk-kill list.
+Planned kills: 6 (see D:\work\system-sanity\out\planned-kills.csv)
+
+Planned processes to terminate:
+=================================
+msedgewebview2                 PID:  16052 RAM:    62.28
+msedgewebview2                 PID:  21072 RAM:    97.91
+msedgewebview2                 PID:  27996 RAM:    20.41
+msedgewebview2                 PID:   5604 RAM:    40.04
+msedgewebview2                 PID:  10444 RAM:   116.34
+msedgewebview2                 PID:  15412 RAM:     9.23
+
+Proceed with terminating these processes? [Y/n]: Y
+
+User selected 6 processes to terminate.
+Capture is opt-in. Skipping typeperf (use -Capture to enable).
+Dumping running services and PID map...
+Transforming CSV and building report...
+Wrote: out/perf_transposed.csv, out/perf_stats.csv, out/latest_snapshot.csv, out/top_cpu_labeled.csv
+Wrote: out/report.html
+Done. Output artifacts in: D:\work\system-sanity\out
+PS D:\work\system-sanity>
+
+-------------------------
+
+.\assess_services.ps1
+Wrote: D:\work\system-sanity\out\service_assessment.csv
+Wrote: D:\work\system-sanity\out\service_actions_taken.csv
+
+---------------------------
+
+
+-------------------
+
+-----------
+
+1) I'm not 100% clear on which is the entry-level script (probably system-sanity) and at what point the others are invoked...
+
+2) Is it possible for processes like Typora#5 (a markdown editor) can be linked to context of what its document is or maybe what its window title is?
+
+3) service_actions_taken contains stuff that I don't believe was shown in the UI (suggested service stops)
+
+4) top_cpu_labeled.csv contains ONLY col headers, in case it's intended to contain more I thought I'd bring to your attn
+contents:
+Instance	PID	CPU_ProcTime	SvcNames	SvcDisplayNames
+
+5) Can the system remove "transitory" files from the out folder (eg, pre-transformed perfmon results) as it's done needing them?
+
+6) Currently, the system does not prompt the user either way to ask about running a perfmon scan (it relies on a -Capture param - which it should respect if provided, but I'd still want the user prompted about this
+
+7) Can we have a tag or grouping for svcs/procs that are "cloud syncers" - specifically Google Drive, Dropbox, possibly OneDrive, iCloud for Windows - so that they can be turned off for normal scenarios  but can be launched either
+manually or on a scheduled basis so that they will perform their resynchronizations? And ideally, be switched back off once complete (if such a thing is even detectable)? A special case of this is Obsidian, which - unless it has a separate "sync" cli or cmd-line param - sync seems to just happen as part of the app being open. This is required to get stuff from mobile (and other PC) and push new stuff to mobile (and other PC).
+
+8) Can we have smarts where if we've killed all processes with a given pattern (eg, msedgewebview2  or OfficeClickToRun), if those things start popping up again while we're running, can we detect that and also what is even restarting those processes?
+
+9) Can we get the available profiles presented to the user in a menu at startup, rather  than requiring their name be passed in as a parameter?
+
+10) Error seen in "chrome_debugger_extract.ps1"
+PS D:\work\system-sanity> .\chrome_debugger_extract.ps1
+Handles  NPM(K)    PM(K)      WS(K)     CPU(s)     Id  SI ProcessName
+-------  ------    -----      -----     ------     --  -- -----------
+     49       7     1364       6408       0.14  26764   1 chrome
+Invoke-RestMethod : Unable to connect to the remote server
+At D:\work\system-sanity\chrome_debugger_extract.ps1:5 char:13
++ $response = Invoke-RestMethod -Uri "http://localhost:9222/json"
++             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (System.Net.HttpWebRequest:HttpWebRequest) [Invoke-RestMethod], WebException + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeRestMethodCommand
+
+11) I'm hoping the ""Needed for normal" designation can be applied to somewhat more things (even if you have to ask the user "Do you need airplane mode?")
