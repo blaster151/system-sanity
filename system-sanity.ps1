@@ -11,8 +11,8 @@
 #     (bypasses menu, uses dev profile directly)
 #   powershell -ExecutionPolicy Bypass -File .\system-sanity.ps1 -ListProfiles
 #     (lists available profiles and exits)
-#   powershell -ExecutionPolicy Bypass -File .\system-sanity.ps1 -Profile normal -ServiceAssess -ServiceInteractiveNormal
-#     (runs service assessment with interactive prompts for additional "normal" services)
+#   powershell -ExecutionPolicy Bypass -File .\system-sanity.ps1 -Profile normal -ServiceAssess -ServiceInteractivePrompts
+#     (runs service assessment with interactive prompts based on profile configuration)
 
 param(
   [int]$DurationSecs = 120,
@@ -27,7 +27,7 @@ param(
   [switch]$ServiceAssess,     # run assess_services.ps1 up front
   [switch]$ServiceApply,      # actually change startup type/stop services
   [switch]$ServicePromptEach, # prompt per service when applying
-  [switch]$ServiceInteractiveNormal  # prompt user for additional "normal" services
+  [switch]$ServiceInteractivePrompts  # prompt user for additional services based on profile configuration
 )
 
 $ErrorActionPreference = "Stop"
@@ -301,7 +301,7 @@ if ($Profile -and $ServiceAssess -and (Test-Path $assessScript)) {
   $args = @("-File", $assessScript, "-Mode", $Profile)
   if ($ServiceApply)      { $args += "-Apply" }
   if ($ServicePromptEach) { $args += "-PromptEach" }
-  if ($ServiceInteractiveNormal) { $args += "-InteractiveNormal" }
+  if ($ServiceInteractivePrompts) { $args += "-InteractivePrompts" }
   # If you prefer to assess the live system even if running-services.csv exists:
   # $args += "-Live"
 

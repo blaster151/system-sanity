@@ -14,8 +14,8 @@ Usage examples:
   # Evaluate only currently running services (ignore CSV), and write outputs
   powershell -ExecutionPolicy Bypass -File .\assess_services.ps1 -Live
 
-  # Interactive mode for Normal profile - prompts user about additional services
-  powershell -ExecutionPolicy Bypass -File .\assess_services.ps1 -Mode normal -InteractiveNormal
+  # Interactive mode - prompts user about additional services based on profile configuration
+  powershell -ExecutionPolicy Bypass -File .\assess_services.ps1 -Mode normal -InteractivePrompts
 
 Outputs (all to .\out\):
   service_assessment.csv
@@ -30,7 +30,7 @@ param(
   [switch]$Apply,        # actually Set-Service (StartupType Manual) + Stop-Service
   [switch]$PromptEach,   # confirm per "unnecessary" service before change
   [switch]$Live,         # use live Get-CimInstance Win32_Service instead of CSV
-  [switch]$InteractiveNormal  # prompt user for additional "normal" services
+  [switch]$InteractivePrompts  # prompt user for additional services based on profile configuration
 )
 
 $ErrorActionPreference = "Stop"
@@ -110,7 +110,7 @@ function Get-ServiceTags([string]$name, [string]$display) {
 }
 
 # Opinion matrix: Needed? (dev/gaming/normal)
-function Get-Opinion([string[]]$tags, [hashtable]$userPreferences = @{}) {
+function Get-Opinion([string[]]$tags, [hashtable]$userPreferences = @{}, [hashtable]$profileConfig = @{}) {
   # Defaults:
   $dev    = $true
   $game   = $true
@@ -161,127 +161,77 @@ function Get-Opinion([string[]]$tags, [hashtable]$userPreferences = @{}) {
     $dev=$true;  $game=$false; $normal=$false
   }
 
-  # Network services: apply user preferences if available
-  if ($tags -contains "network") {
-    if ($userPreferences.ContainsKey("network")) {
-      $normal = $userPreferences["network"]
-    } else {
-      $normal = $false  # Default to not needed, but can be overridden by user
-    }
-  }
-
-  # Storage optimization: apply user preferences if available
-  if ($tags -contains "storage-opt") {
-    if ($userPreferences.ContainsKey("storage-opt")) {
-      $normal = $userPreferences["storage-opt"]
-    } else {
-      $normal = $false  # Default to not needed, but can be overridden by user
-    }
-  }
-
-  # Audio services: apply user preferences if available
-  if ($tags -contains "audio") {
-    if ($userPreferences.ContainsKey("audio")) {
-      $normal = $userPreferences["audio"]
-    } else {
-      $normal = $true  # Default to needed for normal use
-    }
-  }
-
-  # Bluetooth services: apply user preferences if available
-  if ($tags -contains "bluetooth") {
-    if ($userPreferences.ContainsKey("bluetooth")) {
-      $normal = $userPreferences["bluetooth"]
-    } else {
-      $normal = $false  # Default to not needed, but can be overridden by user
-    }
-  }
-
-  # UI/Theme services: apply user preferences if available
-  if ($tags -contains "ui") {
-    if ($userPreferences.ContainsKey("ui")) {
-      $normal = $userPreferences["ui"]
-    } else {
-      $normal = $true  # Default to needed for normal use
-    }
-  }
-
-  # Telemetry services: apply user preferences if available
-  if ($tags -contains "telemetry") {
-    if ($userPreferences.ContainsKey("telemetry")) {
-      $normal = $userPreferences["telemetry"]
-    } else {
-      $normal = $false  # Default to not needed, but can be overridden by user
+  # Apply user preferences or profile defaults for interactive service types
+  $interactiveTags = @("network", "storage-opt", "audio", "bluetooth", "ui", "telemetry")
+  
+  foreach ($tag in $interactiveTags) {
+    if ($tags -contains $tag) {
+      if ($userPreferences.ContainsKey($tag)) {
+        # User provided explicit preference
+        $normal = $userPreferences[$tag]
+      } elseif ($profileConfig.InteractivePrompts -and $profileConfig.InteractivePrompts.$tag) {
+        # Use profile default
+        $normal = $profileConfig.InteractivePrompts.$tag.defaultNeeded
+      } else {
+        # Fallback to hardcoded defaults
+        switch ($tag) {
+          "network" { $normal = $false }
+          "storage-opt" { $normal = $false }
+          "audio" { $normal = $true }
+          "bluetooth" { $normal = $false }
+          "ui" { $normal = $true }
+          "telemetry" { $normal = $false }
+        }
+      }
     }
   }
 
   return [pscustomobject]@{ Dev=$dev; Gaming=$game; Normal=$normal }
 }
 
-# Interactive prompts for additional "normal" services
-function Get-UserPreferencesForNormal {
-  param([string[]]$allTags)
+# Interactive prompts for services based on profile metadata
+function Get-UserPreferencesFromProfile {
+  param(
+    [string[]]$allTags,
+    [hashtable]$profileConfig,
+    [string]$mode
+  )
   
   $preferences = @{}
   $uniqueTags = $allTags | Sort-Object -Unique
   
+  # Check if profile has InteractivePrompts configuration
+  if (-not $profileConfig.InteractivePrompts) {
+    Write-Host "No interactive prompts configured for profile '$mode'" -ForegroundColor Yellow
+    return $preferences
+  }
+  
   Write-Host ""
-  Write-Host "Additional Services for 'Normal' Mode" -ForegroundColor Cyan
-  Write-Host "=====================================" -ForegroundColor Cyan
-  Write-Host "Some services might be useful for normal daily use. Would you like to keep any of these running?" -ForegroundColor Yellow
+  Write-Host "Interactive Service Configuration for '$mode' Mode" -ForegroundColor Cyan
+  Write-Host "=================================================" -ForegroundColor Cyan
+  Write-Host "Configure which services you want to keep running for this mode:" -ForegroundColor Yellow
   Write-Host ""
   
-  # Network services (WiFi, network management, DHCP)
-  if ($uniqueTags -contains "network") {
-    Write-Host "Network Services (WiFi, Network Management, DHCP):" -ForegroundColor White
-    Write-Host "  These services manage your network connections and internet access." -ForegroundColor Gray
-    $response = Read-Host "Do you need network services for normal use? (y/N)"
-    $preferences["network"] = ($response -match '^(y|yes)$')
-    Write-Host ""
-  }
-  
-  # Storage optimization (defrag, disk optimization)
-  if ($uniqueTags -contains "storage-opt") {
-    Write-Host "Storage Optimization Services:" -ForegroundColor White
-    Write-Host "  These services help optimize disk performance and defragment storage." -ForegroundColor Gray
-    $response = Read-Host "Do you need storage optimization for normal use? (y/N)"
-    $preferences["storage-opt"] = ($response -match '^(y|yes)$')
-    Write-Host ""
-  }
-  
-  # Additional prompts for specific service types
-  if ($uniqueTags -contains "telemetry") {
-    Write-Host "Diagnostic/Telemetry Services:" -ForegroundColor White
-    Write-Host "  These services help Windows diagnose issues and provide feedback." -ForegroundColor Gray
-    $response = Read-Host "Do you want to keep diagnostic services for normal use? (y/N)"
-    $preferences["telemetry"] = ($response -match '^(y|yes)$')
-    Write-Host ""
-  }
-  
-  # Audio services
-  if ($uniqueTags -contains "audio") {
-    Write-Host "Audio Services:" -ForegroundColor White
-    Write-Host "  These services manage audio playback and recording." -ForegroundColor Gray
-    $response = Read-Host "Do you need audio services for normal use? (y/N)"
-    $preferences["audio"] = ($response -match '^(y|yes)$')
-    Write-Host ""
-  }
-  
-  # Bluetooth services
-  if ($uniqueTags -contains "bluetooth") {
-    Write-Host "Bluetooth Services:" -ForegroundColor White
-    Write-Host "  These services manage Bluetooth devices and connections." -ForegroundColor Gray
-    $response = Read-Host "Do you need Bluetooth services for normal use? (y/N)"
-    $preferences["bluetooth"] = ($response -match '^(y|yes)$')
-    Write-Host ""
-  }
-  
-  # UI/Theme services
-  if ($uniqueTags -contains "ui") {
-    Write-Host "UI/Theme Services:" -ForegroundColor White
-    Write-Host "  These services manage visual themes and user interface elements." -ForegroundColor Gray
-    $response = Read-Host "Do you need UI/theme services for normal use? (y/N)"
-    $preferences["ui"] = ($response -match '^(y|yes)$')
+  # Process each configured interactive prompt
+  foreach ($tagKey in $profileConfig.InteractivePrompts.PSObject.Properties.Name) {
+    $promptConfig = $profileConfig.InteractivePrompts.$tagKey
+    
+    # Skip if prompt is disabled
+    if (-not $promptConfig.enabled) { continue }
+    
+    # Skip if this tag type isn't present in the current services
+    if (-not ($uniqueTags -contains $tagKey)) { continue }
+    
+    # Display the prompt
+    Write-Host "$($promptConfig.title):" -ForegroundColor White
+    Write-Host "  $($promptConfig.description)" -ForegroundColor Gray
+    
+    # Use the configured question or provide a default
+    $question = if ($promptConfig.question) { $promptConfig.question } else { "Do you need $($tagKey) services for $mode use? (y/N)" }
+    $response = Read-Host $question
+    
+    # Store the preference
+    $preferences[$tagKey] = ($response -match '^(y|yes)$')
     Write-Host ""
   }
   
@@ -292,16 +242,34 @@ function Get-UserPreferencesForNormal {
 
 $assess = @()
 
-# Get user preferences for additional "normal" services if in interactive mode
+# Load profile configuration for interactive prompts
+$profileConfig = @{}
 $userPreferences = @{}
-if ($Mode -eq "normal" -and $InteractiveNormal) {
+
+if ($InteractivePrompts) {
+  # Load profiles from profiles.json
+  $profilesPath = Join-Path $projectRoot "profiles.json"
+  if (Test-Path $profilesPath) {
+    try {
+      $profilesJson = Get-Content $profilesPath -Raw -Encoding UTF8
+      $profiles = $profilesJson | ConvertFrom-Json
+      if ($profiles.$Mode) {
+        $profileConfig = $profiles.$Mode
+      }
+    } catch {
+      Write-Warning "Could not load profile configuration: $($_.Exception.Message)"
+    }
+  }
+  
   # First pass: collect all tags to show relevant prompts
   $allTags = @()
   foreach ($svc in $services) {
     $tags = Get-ServiceTags -name $svc.Name -display $svc.DisplayName
     $allTags += $tags
   }
-  $userPreferences = Get-UserPreferencesForNormal -allTags $allTags
+  
+  # Get user preferences based on profile configuration
+  $userPreferences = Get-UserPreferencesFromProfile -allTags $allTags -profileConfig $profileConfig -mode $Mode
 }
 
 foreach ($svc in $services | Sort-Object Name) {
@@ -314,7 +282,7 @@ foreach ($svc in $services | Sort-Object Name) {
   if ($start -like "Auto*") { $start = "Auto" }
 
   $tags  = Get-ServiceTags -name $name -display $disp
-  $op    = Get-Opinion -tags $tags -userPreferences $userPreferences
+  $op    = Get-Opinion -tags $tags -userPreferences $userPreferences -profileConfig $profileConfig
 
   $neededInMode = switch ($Mode) {
     "dev"    { $op.Dev }

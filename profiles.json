@@ -18,7 +18,23 @@
     ],
     "LaunchAppsPost": [
       "Start-Process steam://open/bigpicture"
-    ]
+    ],
+    "InteractivePrompts": {
+      "audio": {
+        "enabled": true,
+        "title": "Audio Services",
+        "description": "These services manage audio playback and recording.",
+        "question": "Do you need audio services for gaming? (y/N)",
+        "defaultNeeded": true
+      },
+      "network": {
+        "enabled": true,
+        "title": "Network Services",
+        "description": "These services manage your network connections and internet access.",
+        "question": "Do you need network services for gaming? (y/N)",
+        "defaultNeeded": true
+      }
+    }
   },
   "dev": {
     "StopServicesPre": [],
@@ -32,7 +48,30 @@
     "LaunchAppsPost": [
       "Start-Process code",
       "Start-Process powershell -ArgumentList '-NoExit -Command cd \"${env:USERPROFILE}\\source\"'"
-    ]
+    ],
+    "InteractivePrompts": {
+      "network": {
+        "enabled": true,
+        "title": "Network Services",
+        "description": "These services manage your network connections and internet access.",
+        "question": "Do you need network services for development? (y/N)",
+        "defaultNeeded": true
+      },
+      "storage-opt": {
+        "enabled": true,
+        "title": "Storage Optimization Services",
+        "description": "These services help optimize disk performance and defragment storage.",
+        "question": "Do you need storage optimization for development? (y/N)",
+        "defaultNeeded": false
+      },
+      "telemetry": {
+        "enabled": true,
+        "title": "Diagnostic/Telemetry Services",
+        "description": "These services help Windows diagnose issues and provide feedback.",
+        "question": "Do you want to keep diagnostic services for development? (y/N)",
+        "defaultNeeded": false
+      }
+    }
   },
   "normal": {
     "StopServicesPre": [],
@@ -41,6 +80,50 @@
       "Discord*"
     ],
     "StartServicesPost": [],
-    "LaunchAppsPost": []
+    "LaunchAppsPost": [],
+    "InteractivePrompts": {
+      "network": {
+        "enabled": true,
+        "title": "Network Services",
+        "description": "These services manage your network connections and internet access.",
+        "question": "Do you need network services for normal use? (y/N)",
+        "defaultNeeded": true
+      },
+      "audio": {
+        "enabled": true,
+        "title": "Audio Services",
+        "description": "These services manage audio playback and recording.",
+        "question": "Do you need audio services for normal use? (y/N)",
+        "defaultNeeded": true
+      },
+      "bluetooth": {
+        "enabled": true,
+        "title": "Bluetooth Services",
+        "description": "These services manage Bluetooth devices and connections.",
+        "question": "Do you need Bluetooth services for normal use? (y/N)",
+        "defaultNeeded": false
+      },
+      "ui": {
+        "enabled": true,
+        "title": "UI/Theme Services",
+        "description": "These services manage visual themes and user interface elements.",
+        "question": "Do you need UI/theme services for normal use? (y/N)",
+        "defaultNeeded": true
+      },
+      "storage-opt": {
+        "enabled": true,
+        "title": "Storage Optimization Services",
+        "description": "These services help optimize disk performance and defragment storage.",
+        "question": "Do you need storage optimization for normal use? (y/N)",
+        "defaultNeeded": false
+      },
+      "telemetry": {
+        "enabled": true,
+        "title": "Diagnostic/Telemetry Services",
+        "description": "These services help Windows diagnose issues and provide feedback.",
+        "question": "Do you want to keep diagnostic services for normal use? (y/N)",
+        "defaultNeeded": false
+      }
+    }
   }
 }
