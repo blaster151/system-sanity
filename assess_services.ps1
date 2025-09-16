@@ -14,6 +14,9 @@ Usage examples:
   # Evaluate only currently running services (ignore CSV), and write outputs
   powershell -ExecutionPolicy Bypass -File .\assess_services.ps1 -Live
 
+  # Interactive mode for Normal profile - prompts user about additional services
+  powershell -ExecutionPolicy Bypass -File .\assess_services.ps1 -Mode normal -InteractiveNormal
+
 Outputs (all to .\out\):
   service_assessment.csv
   service_actions_taken.csv (if -Apply did anything)
@@ -26,7 +29,8 @@ param(
 
   [switch]$Apply,        # actually Set-Service (StartupType Manual) + Stop-Service
   [switch]$PromptEach,   # confirm per "unnecessary" service before change
-  [switch]$Live          # use live Get-CimInstance Win32_Service instead of CSV
+  [switch]$Live,         # use live Get-CimInstance Win32_Service instead of CSV
+  [switch]$InteractiveNormal  # prompt user for additional "normal" services
 )
 
 $ErrorActionPreference = "Stop"
@@ -95,15 +99,18 @@ function Get-ServiceTags([string]$name, [string]$display) {
   if ($n -like "bits") { $tags += "bits" }
   if ($n -like "ssh-agent" -or $n -like "sshd") { $tags += "ssh" }
   if ($n -like "wuauserv") { $tags += "windows-update" }
-  if ($n -like "wlan*" -or $n -like "netman" -or $n -like "dhcp") { $tags += "network" }
-  if ($n -like "defragsvc") { $tags += "storage-opt" }
+  if ($n -like "wlan*" -or $n -like "netman" -or $n -like "dhcp" -or $n -like "dnscache" -or $n -like "nlasvc" -or $n -like "netprofm") { $tags += "network" }
+  if ($n -like "defragsvc" -or $n -like "disk*" -or $n -like "vss") { $tags += "storage-opt" }
+  if ($n -like "themes" -or $n -like "uxtheme") { $tags += "ui" }
+  if ($n -like "audio*" -or $n -like "audiosrv" -or $n -like "audiodg") { $tags += "audio" }
+  if ($n -like "bluetooth*" -or $n -like "bthserv") { $tags += "bluetooth" }
 
   if ($tags.Count -eq 0) { $tags += "misc" }
   return $tags
 }
 
 # Opinion matrix: Needed? (dev/gaming/normal)
-function Get-Opinion([string[]]$tags) {
+function Get-Opinion([string[]]$tags, [hashtable]$userPreferences = @{}) {
   # Defaults:
   $dev    = $true
   $game   = $true
@@ -154,12 +161,148 @@ function Get-Opinion([string[]]$tags) {
     $dev=$true;  $game=$false; $normal=$false
   }
 
+  # Network services: apply user preferences if available
+  if ($tags -contains "network") {
+    if ($userPreferences.ContainsKey("network")) {
+      $normal = $userPreferences["network"]
+    } else {
+      $normal = $false  # Default to not needed, but can be overridden by user
+    }
+  }
+
+  # Storage optimization: apply user preferences if available
+  if ($tags -contains "storage-opt") {
+    if ($userPreferences.ContainsKey("storage-opt")) {
+      $normal = $userPreferences["storage-opt"]
+    } else {
+      $normal = $false  # Default to not needed, but can be overridden by user
+    }
+  }
+
+  # Audio services: apply user preferences if available
+  if ($tags -contains "audio") {
+    if ($userPreferences.ContainsKey("audio")) {
+      $normal = $userPreferences["audio"]
+    } else {
+      $normal = $true  # Default to needed for normal use
+    }
+  }
+
+  # Bluetooth services: apply user preferences if available
+  if ($tags -contains "bluetooth") {
+    if ($userPreferences.ContainsKey("bluetooth")) {
+      $normal = $userPreferences["bluetooth"]
+    } else {
+      $normal = $false  # Default to not needed, but can be overridden by user
+    }
+  }
+
+  # UI/Theme services: apply user preferences if available
+  if ($tags -contains "ui") {
+    if ($userPreferences.ContainsKey("ui")) {
+      $normal = $userPreferences["ui"]
+    } else {
+      $normal = $true  # Default to needed for normal use
+    }
+  }
+
+  # Telemetry services: apply user preferences if available
+  if ($tags -contains "telemetry") {
+    if ($userPreferences.ContainsKey("telemetry")) {
+      $normal = $userPreferences["telemetry"]
+    } else {
+      $normal = $false  # Default to not needed, but can be overridden by user
+    }
+  }
+
   return [pscustomobject]@{ Dev=$dev; Gaming=$game; Normal=$normal }
+}
+
+# Interactive prompts for additional "normal" services
+function Get-UserPreferencesForNormal {
+  param([string[]]$allTags)
+  
+  $preferences = @{}
+  $uniqueTags = $allTags | Sort-Object -Unique
+  
+  Write-Host ""
+  Write-Host "Additional Services for 'Normal' Mode" -ForegroundColor Cyan
+  Write-Host "=====================================" -ForegroundColor Cyan
+  Write-Host "Some services might be useful for normal daily use. Would you like to keep any of these running?" -ForegroundColor Yellow
+  Write-Host ""
+  
+  # Network services (WiFi, network management, DHCP)
+  if ($uniqueTags -contains "network") {
+    Write-Host "Network Services (WiFi, Network Management, DHCP):" -ForegroundColor White
+    Write-Host "  These services manage your network connections and internet access." -ForegroundColor Gray
+    $response = Read-Host "Do you need network services for normal use? (y/N)"
+    $preferences["network"] = ($response -match '^(y|yes)$')
+    Write-Host ""
+  }
+  
+  # Storage optimization (defrag, disk optimization)
+  if ($uniqueTags -contains "storage-opt") {
+    Write-Host "Storage Optimization Services:" -ForegroundColor White
+    Write-Host "  These services help optimize disk performance and defragment storage." -ForegroundColor Gray
+    $response = Read-Host "Do you need storage optimization for normal use? (y/N)"
+    $preferences["storage-opt"] = ($response -match '^(y|yes)$')
+    Write-Host ""
+  }
+  
+  # Additional prompts for specific service types
+  if ($uniqueTags -contains "telemetry") {
+    Write-Host "Diagnostic/Telemetry Services:" -ForegroundColor White
+    Write-Host "  These services help Windows diagnose issues and provide feedback." -ForegroundColor Gray
+    $response = Read-Host "Do you want to keep diagnostic services for normal use? (y/N)"
+    $preferences["telemetry"] = ($response -match '^(y|yes)$')
+    Write-Host ""
+  }
+  
+  # Audio services
+  if ($uniqueTags -contains "audio") {
+    Write-Host "Audio Services:" -ForegroundColor White
+    Write-Host "  These services manage audio playback and recording." -ForegroundColor Gray
+    $response = Read-Host "Do you need audio services for normal use? (y/N)"
+    $preferences["audio"] = ($response -match '^(y|yes)$')
+    Write-Host ""
+  }
+  
+  # Bluetooth services
+  if ($uniqueTags -contains "bluetooth") {
+    Write-Host "Bluetooth Services:" -ForegroundColor White
+    Write-Host "  These services manage Bluetooth devices and connections." -ForegroundColor Gray
+    $response = Read-Host "Do you need Bluetooth services for normal use? (y/N)"
+    $preferences["bluetooth"] = ($response -match '^(y|yes)$')
+    Write-Host ""
+  }
+  
+  # UI/Theme services
+  if ($uniqueTags -contains "ui") {
+    Write-Host "UI/Theme Services:" -ForegroundColor White
+    Write-Host "  These services manage visual themes and user interface elements." -ForegroundColor Gray
+    $response = Read-Host "Do you need UI/theme services for normal use? (y/N)"
+    $preferences["ui"] = ($response -match '^(y|yes)$')
+    Write-Host ""
+  }
+  
+  return $preferences
 }
 
 # ------------------------------------------------------------------------------
 
 $assess = @()
+
+# Get user preferences for additional "normal" services if in interactive mode
+$userPreferences = @{}
+if ($Mode -eq "normal" -and $InteractiveNormal) {
+  # First pass: collect all tags to show relevant prompts
+  $allTags = @()
+  foreach ($svc in $services) {
+    $tags = Get-ServiceTags -name $svc.Name -display $svc.DisplayName
+    $allTags += $tags
+  }
+  $userPreferences = Get-UserPreferencesForNormal -allTags $allTags
+}
 
 foreach ($svc in $services | Sort-Object Name) {
   $name  = $svc.Name
@@ -171,7 +314,7 @@ foreach ($svc in $services | Sort-Object Name) {
   if ($start -like "Auto*") { $start = "Auto" }
 
   $tags  = Get-ServiceTags -name $name -display $disp
-  $op    = Get-Opinion -tags $tags
+  $op    = Get-Opinion -tags $tags -userPreferences $userPreferences
 
   $neededInMode = switch ($Mode) {
     "dev"    { $op.Dev }
