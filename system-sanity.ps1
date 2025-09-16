@@ -1,16 +1,21 @@
-﻿# system-sanity.ps1
+# system-sanity.ps1
 # Triage + perf snapshot (typeperf) + service maps + CSV transform + optional profiles
 # Usage examples:
 #   powershell -ExecutionPolicy Bypass -File .\system-sanity.ps1
+#     (will show interactive profile menu at startup)
 #   powershell -ExecutionPolicy Bypass -File .\system-sanity.ps1 -DurationSecs 60
+#     (will show interactive profile menu at startup)
 #   powershell -ExecutionPolicy Bypass -File .\system-sanity.ps1 -DurationSecs 90 -Profile gaming
+#     (bypasses menu, uses gaming profile directly)
 #   powershell -ExecutionPolicy Bypass -File .\system-sanity.ps1 -Profile dev -RestoreAfter
+#     (bypasses menu, uses dev profile directly)
 #   powershell -ExecutionPolicy Bypass -File .\system-sanity.ps1 -ListProfiles
+#     (lists available profiles and exits)
 
 param(
   [int]$DurationSecs = 120,
   [int]$IntervalSecs = 5,
-  [string]$Profile,           # e.g., "gaming", "dev", "normal"
+  [string]$Profile,           # e.g., "gaming", "dev", "normal" (if not specified, interactive menu will be shown)
   [switch]$RestoreAfter,      # if present, try to restore services/apps defined by the profile after capture
   [switch]$ListProfiles,      # list available profiles and exit
   [switch]$DryRun,            # plan-only; do NOT kill/stop/start/launch
@@ -197,6 +202,81 @@ function Pick-Processes-OGV {
   return @()
 }
 
+function Show-ProfileMenu {
+  param([hashtable]$Profiles)
+  
+  if ($Profiles.PSObject.Properties.Name.Count -eq 0) {
+    Write-Host "No profiles available. Using default behavior." -ForegroundColor Yellow
+    return $null
+  }
+  
+  Write-Host ""
+  Write-Host "Available Profiles:" -ForegroundColor Cyan
+  Write-Host "==================" -ForegroundColor Cyan
+  
+  $profileNames = $Profiles.PSObject.Properties.Name | Sort-Object
+  $index = 1
+  
+  foreach ($profileName in $profileNames) {
+    $profile = $Profiles.$profileName
+    $description = ""
+    
+    # Generate a brief description based on profile contents
+    if ($profile.KillProcesses) {
+      $killCount = $profile.KillProcesses.Count
+      $description += "Kills $killCount process types"
+    }
+    if ($profile.StopServicesPre) {
+      $serviceCount = $profile.StopServicesPre.Count
+      if ($description) { $description += ", " }
+      $description += "Stops $serviceCount services"
+    }
+    if ($profile.LaunchAppsPost) {
+      $appCount = $profile.LaunchAppsPost.Count
+      if ($description) { $description += ", " }
+      $description += "Launches $appCount apps"
+    }
+    if (-not $description) {
+      $description = "Basic profile"
+    }
+    
+    Write-Host ("{0}. {1,-12} - {2}" -f $index, $profileName, $description) -ForegroundColor White
+    $index++
+  }
+  
+  Write-Host ""
+  Write-Host ("{0}. Skip profile selection (use default junk-kill list)" -f $index) -ForegroundColor Gray
+  Write-Host ("{0}. Exit" -f ($index + 1)) -ForegroundColor Red
+  Write-Host ""
+  
+  do {
+    try {
+      $choice = Read-Host "Select a profile (1-$($index + 1))"
+      $choiceNum = [int]$choice
+      
+      if ($choiceNum -ge 1 -and $choiceNum -le $profileNames.Count) {
+        $selectedProfile = $profileNames[$choiceNum - 1]
+        Write-Host ("Selected profile: {0}" -f $selectedProfile) -ForegroundColor Green
+        return $selectedProfile
+      }
+      elseif ($choiceNum -eq $index) {
+        Write-Host "Using default behavior (no profile)" -ForegroundColor Yellow
+        return $null
+      }
+      elseif ($choiceNum -eq ($index + 1)) {
+        Write-Host "Exiting..." -ForegroundColor Red
+        exit 0
+      }
+      else {
+        Write-Host "Invalid selection. Please try again." -ForegroundColor Red
+      }
+    }
+    catch {
+      Write-Host "Invalid input. Please enter a number." -ForegroundColor Red
+    }
+  } while ($true)
+}
+
 # ----- Profiles -----
 $Profiles = Load-Profiles -Path $profilesPath
 
@@ -236,6 +316,11 @@ $defaultJunk = @(
 $ProfileCfg = $null
 $plannedKills = @()
 $usedKillList = @()
+
+# Show profile menu if no profile was specified via parameter
+if (-not $Profile) {
+  $Profile = Show-ProfileMenu -Profiles $Profiles
+}
 
 if ($Profile) {
   if ($Profiles.$Profile) {
