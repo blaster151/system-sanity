@@ -40,12 +40,37 @@ $profilesPath = Join-Path $projectRoot "profiles.json"
 New-Item -Type Directory -Path $outDir -Force | Out-Null
 
 # ----- Helpers -----
+function ConvertTo-HashtableRecursive {
+  param([object]$InputObject)
+  
+  if ($InputObject -is [PSCustomObject]) {
+    $hashtable = @{}
+    $InputObject.PSObject.Properties | ForEach-Object {
+      $hashtable[$_.Name] = ConvertTo-HashtableRecursive -InputObject $_.Value
+    }
+    return $hashtable
+  }
+  elseif ($InputObject -is [System.Array]) {
+    $array = @()
+    foreach ($item in $InputObject) {
+      $array += ConvertTo-HashtableRecursive -InputObject $item
+    }
+    return $array
+  }
+  else {
+    return $InputObject
+  }
+}
+
 function Load-Profiles {
   param([string]$Path)
   if (!(Test-Path $Path)) { return @{} }
   try {
     $json = Get-Content $Path -Raw -Encoding UTF8
-    return $json | ConvertFrom-Json
+    $psObject = $json | ConvertFrom-Json
+    
+    # Convert PSCustomObject to hashtable recursively
+    return ConvertTo-HashtableRecursive -InputObject $psObject
   } catch {
     Write-Warning ("Could not parse profiles file: {0}" -f $Path)
     return @{}
@@ -208,7 +233,7 @@ function Pick-Processes-OGV {
 function Show-ProfileMenu {
   param([hashtable]$Profiles)
   
-  if ($Profiles.PSObject.Properties.Name.Count -eq 0) {
+  if ($Profiles.Count -eq 0) {
     Write-Host "No profiles available. Using default behavior." -ForegroundColor Yellow
     return $null
   }
@@ -217,11 +242,11 @@ function Show-ProfileMenu {
   Write-Host "Available Profiles:" -ForegroundColor Cyan
   Write-Host "==================" -ForegroundColor Cyan
   
-  $profileNames = $Profiles.PSObject.Properties.Name | Sort-Object
+  $profileNames = $Profiles.Keys | Sort-Object
   $index = 1
   
   foreach ($profileName in $profileNames) {
-    $profile = $Profiles.$profileName
+    $profile = $Profiles[$profileName]
     $description = ""
     
     # Generate a brief description based on profile contents
@@ -284,11 +309,11 @@ function Show-ProfileMenu {
 $Profiles = Load-Profiles -Path $profilesPath
 
 if ($ListProfiles) {
-  if ($Profiles.PSObject.Properties.Name.Count -eq 0) {
+  if ($Profiles.Count -eq 0) {
     Write-Output ("No profiles found at {0}" -f $profilesPath)
   } else {
     Write-Output ("Profiles from {0}:" -f $profilesPath)
-    $Profiles.PSObject.Properties.Name | Sort-Object | ForEach-Object { Write-Output (" - {0}" -f $_) }
+    $Profiles.Keys | Sort-Object | ForEach-Object { Write-Output (" - {0}" -f $_) }
   }
   return
 }
