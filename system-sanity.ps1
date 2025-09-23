@@ -40,6 +40,28 @@ $profilesPath = Join-Path $projectRoot "profiles.json"
 New-Item -Type Directory -Path $outDir -Force | Out-Null
 
 # ----- Helpers -----
+function ConvertTo-HashtableRecursive {
+  param([object]$InputObject)
+  
+  if ($InputObject -is [PSCustomObject]) {
+    $hashtable = @{}
+    $InputObject.PSObject.Properties | ForEach-Object {
+      $hashtable[$_.Name] = ConvertTo-HashtableRecursive -InputObject $_.Value
+    }
+    return $hashtable
+  }
+  elseif ($InputObject -is [System.Array]) {
+    $array = @()
+    foreach ($item in $InputObject) {
+      $array += ConvertTo-HashtableRecursive -InputObject $item
+    }
+    return $array
+  }
+  else {
+    return $InputObject
+  }
+}
+
 function Load-Profiles {
   param([string]$Path)
   if (!(Test-Path $Path)) { return @{} }
@@ -47,12 +69,8 @@ function Load-Profiles {
     $json = Get-Content $Path -Raw -Encoding UTF8
     $psObject = $json | ConvertFrom-Json
     
-    # Convert PSCustomObject to hashtable
-    $hashtable = @{}
-    $psObject.PSObject.Properties | ForEach-Object {
-      $hashtable[$_.Name] = $_.Value
-    }
-    return $hashtable
+    # Convert PSCustomObject to hashtable recursively
+    return ConvertTo-HashtableRecursive -InputObject $psObject
   } catch {
     Write-Warning ("Could not parse profiles file: {0}" -f $Path)
     return @{}
