@@ -5,12 +5,36 @@
       "MSSQLSERVER"
     ],
     "KillProcesses": [
-      "chrome*",
-      "Code*",
-      "node*",
-      "dotnet*",
-      "msbuild*",
-      "devenv*"
+      {
+        "pattern": "chrome*",
+        "promptUser": true,
+        "reason": "May have important browser tabs, videos, or reference materials open"
+      },
+      {
+        "pattern": "Code*",
+        "promptUser": true,
+        "reason": "May have unsaved work or debugging sessions"
+      },
+      {
+        "pattern": "node*",
+        "promptUser": false,
+        "reason": "Development servers and build tools"
+      },
+      {
+        "pattern": "dotnet*",
+        "promptUser": false,
+        "reason": ".NET development tools"
+      },
+      {
+        "pattern": "msbuild*",
+        "promptUser": false,
+        "reason": "Build processes"
+      },
+      {
+        "pattern": "devenv*",
+        "promptUser": false,
+        "reason": "Visual Studio development environment"
+      }
     ],
     "StartServicesPost": [
       "MSSQLSERVER",
@@ -23,10 +47,26 @@
   "dev": {
     "StopServicesPre": [],
     "KillProcesses": [
-      "steam*",
-      "battle.net*",
-      "epic*",
-      "Overwolf*"
+      {
+        "pattern": "steam*",
+        "promptUser": true,
+        "reason": "Gaming platform - may have active game sessions"
+      },
+      {
+        "pattern": "battle.net*",
+        "promptUser": true,
+        "reason": "Battle.net launcher - may have games running"
+      },
+      {
+        "pattern": "epic*",
+        "promptUser": true,
+        "reason": "Epic Games launcher - may have games running"
+      },
+      {
+        "pattern": "Overwolf*",
+        "promptUser": false,
+        "reason": "Gaming overlay - usually safe to kill"
+      }
     ],
     "StartServicesPost": [],
     "LaunchAppsPost": [
@@ -37,8 +77,66 @@
   "normal": {
     "StopServicesPre": [],
     "KillProcesses": [
-      "Overwolf*",
-      "Discord*"
+      {
+        "pattern": "msedge.exe",
+        "promptUser": true,
+        "reason": "Main Microsoft Edge browser - may have important tabs open"
+      },
+      {
+        "pattern": "msedgewebview2.exe",
+        "promptUser": false,
+        "reason": "Edge WebView processes - usually safe to kill (widgets, PWAs)"
+      },
+      {
+        "pattern": "widg*",
+        "promptUser": false,
+        "reason": "Windows widgets - usually safe to kill"
+      },
+      {
+        "pattern": "Adobe*",
+        "promptUser": false,
+        "reason": "Adobe updater processes"
+      },
+      {
+        "pattern": "CreativeCloud*",
+        "promptUser": false,
+        "reason": "Adobe Creative Cloud processes"
+      },
+      {
+        "pattern": "Apple*Software*Update*",
+        "promptUser": false,
+        "reason": "Apple software updater"
+      },
+      {
+        "pattern": "GoogleUpdate*",
+        "promptUser": false,
+        "reason": "Google updater processes"
+      },
+      {
+        "pattern": "OfficeClickToRun*",
+        "promptUser": false,
+        "reason": "Office updater processes"
+      },
+      {
+        "pattern": "MSOSync*",
+        "promptUser": false,
+        "reason": "Office sync processes"
+      },
+      {
+        "pattern": "OneDriveSetup*",
+        "promptUser": false,
+        "reason": "OneDrive setup processes"
+      },
+      {
+        "pattern": "Overwolf*",
+        "promptUser": false,
+        "reason": "Gaming overlay"
+      },
+      {
+        "pattern": "Discord*",
+        "promptUser": true,
+        "reason": "Discord - may have active voice calls or chats"
+      }
     ],
     "StartServicesPost": [],
     "LaunchAppsPost": []

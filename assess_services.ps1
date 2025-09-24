@@ -16,7 +16,7 @@ Usage examples:
 
 Outputs (all to .\out\):
   service_assessment.csv
-  service_actions_taken.csv (if -Apply did anything)
+  service_actions_taken.csv (always created; shows planned or applied actions)
 #>
 
 [CmdletBinding(SupportsShouldProcess=$true)]
@@ -209,6 +209,35 @@ $assessPath = Join-Path $outDir "service_assessment.csv"
 $assess | Export-Csv -NoTypeInformation -Path $assessPath
 Write-Output ("Wrote: {0}" -f $assessPath)
 
+# Show recommendations in console (especially for dry-run mode)
+$unneededServices = $assess | Where-Object { $_.Recommendation -like "Unneeded generally*" }
+$modeSpecificServices = $assess | Where-Object { $_.Recommendation -like "Not needed for $($Mode)*" }
+
+if ($unneededServices.Count -gt 0 -or $modeSpecificServices.Count -gt 0) {
+  Write-Host ""
+  Write-Host "=== SERVICE RECOMMENDATIONS ===" -ForegroundColor Cyan
+  
+  if ($unneededServices.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Services that are generally unneeded (consider setting to Manual and stopping):" -ForegroundColor Yellow
+    $unneededServices | ForEach-Object {
+      Write-Host ("  {0,-30} [{1}] - {2}" -f $_.DisplayName, $_.Name, $_.Description)
+    }
+  }
+  
+  if ($modeSpecificServices.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Services not needed for $($Mode) mode (consider stopping during this session):" -ForegroundColor Yellow
+    $modeSpecificServices | ForEach-Object {
+      Write-Host ("  {0,-30} [{1}] - {2}" -f $_.DisplayName, $_.Name, $_.Description)
+    }
+  }
+  
+  Write-Host ""
+  Write-Host "To apply changes, run with -Apply flag. Use -PromptEach to confirm each change." -ForegroundColor Green
+  Write-Host "Example: .\assess_services.ps1 -Mode $($Mode) -Apply -PromptEach" -ForegroundColor Green
+}
+
 # Actions: for services "Unneeded generally" -> if StartType != Manual, prompt to change; always offer to stop now
 $actions = @()
 foreach ($row in $assess) {
@@ -238,6 +267,10 @@ foreach ($row in $assess) {
       $doFlip = $shouldFlipStartup
       $doStop = $true
     }
+  } else {
+    # Dry-run mode: show what would be done
+    $doFlip = $shouldFlipStartup
+    $doStop = $true
   }
 
   $flipOk = $false
@@ -277,13 +310,15 @@ foreach ($row in $assess) {
     ActionStopNow_Requested      = $doStop
     ActionStopNow_Success        = $stopOk
     ActionStop_Error             = $stopErr
+    ActionMode                   = if ($Apply) { "Applied" } else { "Planned" }
   }
 }
 
 if ($actions.Count -gt 0) {
   $actPath = Join-Path $outDir "service_actions_taken.csv"
   $actions | Export-Csv -NoTypeInformation -Path $actPath
-  Write-Output ("Wrote: {0}" -f $actPath)
+  $modeText = if ($Apply) { "applied" } else { "planned" }
+  Write-Output ("Wrote: {0} ({1} actions {2})" -f $actPath, $actions.Count, $modeText)
 } else {
-  Write-Output ("No changes applied (use -Apply to act, -PromptEach to confirm per service).")
+  Write-Output ("No service actions planned (all services are already optimally configured).")
 }
