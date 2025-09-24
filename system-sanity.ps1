@@ -1331,8 +1331,8 @@ if (-not $DryRun) {
 # Execute service changes first (services before processes)
 if (-not $DryRun -and $serviceActions.Count -gt 0) {
   Write-Output ""
-  Write-Output "=== EXECUTING SERVICE CHANGES ==="
-  Write-Output ("Processing {0} service changes..." -f $serviceActions.Count)
+  Write-Output "=== SERVICE CHANGES PLANNED ==="
+  Write-Output ("The following {0} service changes will be made:" -f $serviceActions.Count)
   
   $serviceCount = 0
   foreach ($action in $serviceActions) {
