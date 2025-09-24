@@ -34,15 +34,17 @@ html_doc=f"""<!doctype html><meta charset="utf-8"><title>System Sanity Report</t
  table.tbl{{border-collapse:collapse;width:100%;margin:12px 0 32px;font-size:14px;table-layout:fixed}}
  .tbl th,.tbl td{{border:1px solid #ddd;padding:6px 8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}}
  .tbl th{{background:#f7f7f7;cursor:pointer;position:sticky;top:0;z-index:2}}
- .tbl td.firstcol{{position:sticky;left:0;background:#fff;font-weight:600;z-index:1;max-width:520px}}
- .tbl tr:nth-child(even){{background:#fafafa}}
+.tbl td.firstcol{{position:sticky;left:0;background:#fff;font-weight:600;z-index:1;max-width:450px}}
+.tbl tr:nth-child(even){{background:#fafafa}}
+.tbl td:nth-child(1){{max-width:80px;text-align:center;font-weight:600;color:#333}}
+.tbl td:nth-child(2){{max-width:100px;white-space:nowrap;text-overflow:ellipsis}}
  .hint{{color:#666;font-size:12px;margin-top:-10px}}
 </style>
 <h1>System Sanity Report</h1>
 <div class="meta">Generated {html.escape(ts)} — Source: <code>{html.escape(outdir)}</code></div>
 <p class="hint">Click a column to sort. First column is frozen in Stats and Transposed.</p>
 {table_html("Top CPU (latest, with Services)", top)}
-{table_html("Compact Stats (Min / Max / Average)", stats, freeze_first=True)}
+{table_html("Compact Stats (PID / Counter / Min / Max / Average)", stats, freeze_first=True)}
 {table_html("Perf Transposed (raw samples; Average rightmost)", trans, freeze_first=True)}
 <script>
 document.querySelectorAll('table.tbl th').forEach((th,idx)=>{{

@@ -89,6 +89,14 @@ def main():
     # --- Transpose with labels preserved
     transposed = []
     stats_rows = []
+
+    # Only include meaningful performance metrics in stats (not Process IDs or other metadata)
+    meaningful_metrics = [
+        "% Processor Time", "Working Set", "Private Bytes", "Virtual Bytes",
+        "Handle Count", "Thread Count", "IO Read Operations/sec", "IO Write Operations/sec",
+        "Available MBytes", "% Committed Bytes In Use", "Cache Bytes"
+    ]
+
     for c in range(1, width):
         label  = header[c].strip()
         series = [data[r][c] for r in range(len(data))]
@@ -98,13 +106,21 @@ def main():
         mn  = min(nums)  if nums else 0.0
         mx  = max(nums)  if nums else 0.0
         transposed.append([label] + series + [f"{avg:.6f}"])
-        stats_rows.append([label, f"{mn:.6f}", f"{mx:.6f}", f"{avg:.6f}"])
+
+        # Only include in stats if it's a meaningful performance metric
+        inst, metric = parse_process_label(label)
+        if (metric in meaningful_metrics or
+            (inst is None and any(m in label for m in meaningful_metrics))):
+            stats_rows.append([label, f"{mn:.6f}", f"{mx:.6f}", f"{avg:.6f}"])
 
     transposed.sort(key=lambda r: to_float(r[-1]) or 0.0, reverse=True)
     write_csv(os.path.join(outdir,"perf_transposed.csv"),
               ["Counter"] + times + ["Average"], transposed)
+    # Sort enhanced stats by average value (descending)
+    enhanced_stats_rows.sort(key=lambda r: to_float(r[4]) or 0.0, reverse=True)
+
     write_csv(os.path.join(outdir,"perf_stats.csv"),
-              ["Counter","Min","Max","Average"], sorted(stats_rows, key=lambda r: to_float(r[-1]) or 0.0, reverse=True))
+              ["PID","Counter","Min","Max","Average"], enhanced_stats_rows)
 
     # --- Latest snapshot (flatten) + PID correlation
     latest_i  = len(times)-1
@@ -125,6 +141,36 @@ def main():
 
     write_csv(os.path.join(outdir,"latest_snapshot.csv"),
               ["Time","Kind","Instance","Metric","Value"], latest_rows)
+
+    # --- Enhanced stats with PIDs for process-specific metrics
+    enhanced_stats_rows = []
+    meaningful_metrics = [
+        "% Processor Time", "Working Set", "Private Bytes", "Virtual Bytes",
+        "Handle Count", "Thread Count", "IO Read Operations/sec", "IO Write Operations/sec"
+    ]
+
+    for c in range(1, width):
+        label  = header[c].strip()
+        series = [data[r][c] for r in range(len(data))]
+        nums   = [to_float(v) for v in series]
+        nums   = [v for v in nums if v is not None]
+        avg = mean(nums) if nums else 0.0
+        mn  = min(nums)  if nums else 0.0
+        mx  = max(nums)  if nums else 0.0
+
+        # Parse the counter to see if it's process-specific
+        inst, metric = parse_process_label(label)
+
+        # Only include in enhanced stats if it's a meaningful performance metric
+        if (metric in meaningful_metrics or
+            (inst is None and any(m in label for m in meaningful_metrics))):
+
+            # For process-specific metrics, add PID if available
+            pid = ""
+            if inst is not None and inst in pid_by_instance:
+                pid = str(pid_by_instance[inst])
+
+            enhanced_stats_rows.append([pid, label, f"{mn:.6f}", f"{mx:.6f}", f"{avg:.6f}"])
 
     # --- Top CPU labeled with services
     cpu_rows = []

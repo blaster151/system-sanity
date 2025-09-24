@@ -535,7 +535,6 @@ function Plan-KillsByPatterns {
     $process = $_.Process
     $pattern = $_.Pattern
     $n = $process.Name
-    if ($true) {
       # Get additional context for various processes
       $context = ""
       try {
@@ -545,7 +544,7 @@ function Plan-KillsByPatterns {
         if ($parentId) {
           $parentName = (Get-Process -Id $parentId -ErrorAction SilentlyContinue).ProcessName
         }
-
+        
         # Get window titles for additional context
         $windowTitles = Get-ProcessWindowTitle -ProcessId $process.Id
         
@@ -669,7 +668,6 @@ function Plan-KillsByPatterns {
         Reason = $pattern.reason
       }
     }
-  }
   return $processMatches
 }
 
@@ -1402,14 +1400,14 @@ if (-not $DryRun) {
       if ($chromes.Count -gt 0) {
         Write-Output ("Terminating {0} Chrome processes..." -f $chromes.Count)
         $chromeCount = 0
-        foreach ($p in $chromes) {
+      foreach ($p in $chromes) {
           $chromeCount++
           Write-Output ("[{0}/{1}] Terminating Chrome {2} (PID: {3})..." -f $chromeCount, $chromes.Count, $p.Name, $p.PID)
-          try { 
-            Stop-Process -Id $p.PID -Force -ErrorAction Stop 
-            Write-Output ("Terminated {0} (PID: {1})" -f $p.Name, $p.PID)
-          } catch { 
-            Write-Warning ("Could not kill {0} ({1}): {2}" -f $p.Name, $p.PID, $_.Exception.Message) 
+        try { 
+          Stop-Process -Id $p.PID -Force -ErrorAction Stop 
+          Write-Output ("Terminated {0} (PID: {1})" -f $p.Name, $p.PID)
+        } catch { 
+          Write-Warning ("Could not kill {0} ({1}): {2}" -f $p.Name, $p.PID, $_.Exception.Message) 
           }
         }
       }
