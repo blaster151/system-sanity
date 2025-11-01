@@ -54,8 +54,8 @@ if ($Live) {
       $services += [pscustomobject]@{
         Name        = $r.Name
         DisplayName = $r.DisplayName
-        State       = $r.Status
-        StartMode   = if ($wmi) { $wmi.StartMode } else { $r.StartType }
+        State       = if ($r.State) { $r.State } else { $r.Status }  # Handle both old and new CSV formats
+        StartMode   = if ($wmi) { $wmi.StartMode } elseif ($r.StartMode) { $r.StartMode } else { $r.StartType }
         Description = if ($wmi) { $wmi.Description } else { "" }
         ProcessId   = if ($wmi) { $wmi.ProcessId } else { $null }
       }

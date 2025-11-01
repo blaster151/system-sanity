@@ -118,6 +118,82 @@ function Launch-Apps {
   }
 }
 
+function Get-DisplayInfo {
+  Write-Host ""
+  Write-Host "=== DISPLAY CONFIGURATION ===" -ForegroundColor Cyan
+  
+  try {
+    # Use WMI to get monitor information
+    $monitors = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue
+    $videoControllers = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
+    
+    if ($videoControllers) {
+      $displayNum = 1
+      foreach ($controller in $videoControllers) {
+        if ($controller.CurrentHorizontalResolution -and $controller.CurrentVerticalResolution) {
+          $width = $controller.CurrentHorizontalResolution
+          $height = $controller.CurrentVerticalResolution
+          $refreshRate = $controller.CurrentRefreshRate
+          $name = $controller.Name
+          $adapterRAM = [math]::Round($controller.AdapterRAM / 1GB, 2)
+          
+          Write-Host ("Display {0}: {1}" -f $displayNum, $name) -ForegroundColor Green
+          Write-Host ("  Resolution: {0} x {1}" -f $width, $height) -ForegroundColor White
+          
+          if ($refreshRate -and $refreshRate -gt 0) {
+            Write-Host ("  Refresh Rate: {0} Hz" -f $refreshRate) -ForegroundColor White
+          } else {
+            Write-Host ("  Refresh Rate: Unknown" -f $refreshRate) -ForegroundColor Gray
+          }
+          
+          if ($adapterRAM -gt 0) {
+            Write-Host ("  Video Memory: {0} GB" -f $adapterRAM) -ForegroundColor White
+          }
+          
+          $displayNum++
+        }
+      }
+    }
+    
+    # Also try to get more detailed info using CIM
+    $desktopMonitors = Get-CimInstance -ClassName Win32_DesktopMonitor -ErrorAction SilentlyContinue
+    if ($desktopMonitors) {
+      foreach ($monitor in $desktopMonitors) {
+        if ($monitor.ScreenWidth -and $monitor.ScreenHeight) {
+          Write-Host ""
+          Write-Host ("Monitor: {0}" -f $monitor.Name) -ForegroundColor Green
+          Write-Host ("  Resolution: {0} x {1}" -f $monitor.ScreenWidth, $monitor.ScreenHeight) -ForegroundColor White
+        }
+      }
+    }
+    
+    # Try to get physical monitor info
+    if ($monitors) {
+      Write-Host ""
+      Write-Host "Physical Monitor Details:" -ForegroundColor Yellow
+      $monNum = 1
+      foreach ($mon in $monitors) {
+        $widthCm = [math]::Round($mon.MaxHorizontalImageSize, 1)
+        $heightCm = [math]::Round($mon.MaxVerticalImageSize, 1)
+        
+        if ($widthCm -gt 0 -and $heightCm -gt 0) {
+          # Calculate diagonal in inches
+          $diagonalCm = [math]::Sqrt([math]::Pow($widthCm, 2) + [math]::Pow($heightCm, 2))
+          $diagonalInch = [math]::Round($diagonalCm / 2.54, 1)
+          
+          Write-Host ("  Monitor {0}: {1}cm x {2}cm (~{3} inches diagonal)" -f $monNum, $widthCm, $heightCm, $diagonalInch) -ForegroundColor White
+          $monNum++
+        }
+      }
+    }
+    
+    Write-Host ""
+    
+  } catch {
+    Write-Warning "Could not retrieve display information: $($_.Exception.Message)"
+  }
+}
+
 function Get-ProcessWindowTitle {
   param([int]$ProcessId)
   try {
@@ -854,6 +930,239 @@ function Disable-WindowsWidgets {
   return $success
 }
 
+function Get-PackageCacheFiles {
+  param([string]$PackageCachePath = "$env:ProgramData\Package Cache")
+  
+  if (-not (Test-Path $PackageCachePath)) {
+    return @()
+  }
+
+  Write-Host "Analyzing Package Cache files..." -ForegroundColor Yellow
+  
+  try {
+    # Get all MSI, MSP, and EXE files in Package Cache
+    $cacheFiles = Get-ChildItem $PackageCachePath -Recurse -Include "*.msi", "*.msp", "*.exe" -ErrorAction SilentlyContinue
+    if (-not $cacheFiles) {
+      return @()
+    }
+
+    # Get currently installed programs from registry
+    $installedPrograms = @{}
+    $registryPaths = @(
+      "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+      "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+      "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    
+    foreach ($regPath in $registryPaths) {
+      Get-ItemProperty $regPath -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.DisplayName) {
+          $installedPrograms[$_.DisplayName] = @{
+            Version = $_.DisplayVersion
+            InstallDate = $_.InstallDate
+            Publisher = $_.Publisher
+            UninstallString = $_.UninstallString
+          }
+        }
+      }
+    }
+
+    # Analyze each cached file
+    $safeFiles = @()
+    $unsafeFiles = @()
+    $totalSize = 0
+    $safeSize = 0
+    
+    foreach ($file in $cacheFiles) {
+      $totalSize += $file.Length
+      
+      # Extract product info from path
+      $pathParts = $file.DirectoryName -split '\\'
+      $guidFolder = $pathParts | Where-Object { $_ -match '^\{[A-F0-9-]+\}' } | Select-Object -First 1
+      $productName = ""
+      
+      # Try to extract product name from filename or folder structure
+      if ($file.Name -match '^(.+?)(?:Installer|Setup|_x64|_x86)?\.(?:msi|exe)$') {
+        $productName = $matches[1] -replace '_', ' '
+      }
+      
+      # Additional safety checks
+      $isOld = $file.LastWriteTime -lt (Get-Date).AddYears(-1)  # Older than 1 year
+      $isVeryOld = $file.LastWriteTime -lt (Get-Date).AddYears(-2)  # Older than 2 years
+      $isLarge = $file.Length -gt 100MB  # Larger than 100MB
+      $isSmall = $file.Length -lt 10MB   # Smaller than 10MB (likely safe)
+      
+      # Check if product appears to still be installed
+      $isProductInstalled = $false
+      if ($productName) {
+        $isProductInstalled = $installedPrograms.Keys | Where-Object { 
+          $_ -like "*$productName*" -or $productName -like "*$($_)*" 
+        } | Select-Object -First 1
+      }
+      
+      # Determine if safe to delete
+      $isSafe = $false
+      $reason = ""
+      
+      if ($isVeryOld -and $isSmall -and -not $isProductInstalled) {
+        $isSafe = $true
+        $reason = "Very old, small, product not found"
+      } elseif ($isOld -and -not $isProductInstalled -and $file.Name -match '(old|backup|temp|cache)') {
+        $isSafe = $true
+        $reason = "Old, product not found, appears temporary"
+      } elseif ($isVeryOld -and $file.Name -match '\d{4}\.\d+\.\d+' -and -not $isProductInstalled) {
+        $isSafe = $true
+        $reason = "Very old versioned file, product not found"
+      }
+      
+      $fileInfo = @{
+        Path = $file.FullName
+        Name = $file.Name
+        Directory = $file.DirectoryName
+        SizeMB = [math]::Round($file.Length / 1MB, 1)
+        LastModified = $file.LastWriteTime
+        Age = (Get-Date) - $file.LastWriteTime
+        ProductName = $productName
+        GuidFolder = $guidFolder
+        IsProductInstalled = [bool]$isProductInstalled
+        Reason = $reason
+      }
+      
+      if ($isSafe) {
+        $safeFiles += $fileInfo
+        $safeSize += $file.Length
+      } else {
+        $unsafeFiles += $fileInfo
+      }
+    }
+
+    return @{
+      TotalFiles = $cacheFiles.Count
+      TotalSizeGB = [math]::Round($totalSize / 1GB, 2)
+      SafeToDeleteFiles = $safeFiles
+      SafeToDeleteSizeGB = [math]::Round($safeSize / 1GB, 2)
+      UnsafeFiles = $unsafeFiles
+      InstalledPrograms = $installedPrograms.Count
+      CachePath = $PackageCachePath
+    }
+    
+  } catch {
+    Write-Warning "Error analyzing Package Cache files: $($_.Exception.Message)"
+    return @{}
+  }
+}
+
+function Get-InstallerMspFiles {
+  param([string]$InstallerPath = "$env:WINDIR\Installer")
+  
+  if (-not (Test-Path $InstallerPath)) {
+    return @()
+  }
+
+  Write-Host "Analyzing Windows Installer MSP files..." -ForegroundColor Yellow
+  
+  try {
+    # Get all MSP files
+    $mspFiles = Get-ChildItem $InstallerPath -Filter "*.msp" -ErrorAction SilentlyContinue
+    if (-not $mspFiles) {
+      return @()
+    }
+
+    # Get installed patches from registry to determine which MSP files are still referenced
+    $installedPatches = @{}
+    
+    # Check both 32-bit and 64-bit registry locations
+    $registryPaths = @(
+      "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Patches",
+      "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Patches"
+    )
+    
+    foreach ($regPath in $registryPaths) {
+      if (Test-Path $regPath) {
+        Get-ChildItem $regPath -ErrorAction SilentlyContinue | ForEach-Object {
+          try {
+            $localPackage = Get-ItemProperty $_.PSPath -Name "LocalPackage" -ErrorAction SilentlyContinue
+            if ($localPackage -and $localPackage.LocalPackage) {
+              $fileName = Split-Path $localPackage.LocalPackage -Leaf
+              $installedPatches[$fileName] = $true
+            }
+          } catch {
+            # Ignore registry read errors
+          }
+        }
+      }
+    }
+
+    # Also check Windows Installer cache for referenced MSP files
+    $msiexecOutput = & cmd /c "msiexec /?" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      # Use Windows Installer API to get patch info (if available)
+      try {
+        $installer = New-Object -ComObject WindowsInstaller.Installer
+        $products = $installer.Products
+        
+        foreach ($product in $products) {
+          try {
+            $patches = $installer.Patches($product)
+            foreach ($patch in $patches) {
+              try {
+                $patchPath = $installer.PatchInfo($patch, "LocalPackage")
+                if ($patchPath) {
+                  $fileName = Split-Path $patchPath -Leaf
+                  $installedPatches[$fileName] = $true
+                }
+              } catch {
+                # Ignore individual patch errors
+              }
+            }
+          } catch {
+            # Ignore individual product errors
+          }
+        }
+      } catch {
+        # COM object not available or other error
+      }
+    }
+
+    # Categorize MSP files
+    $safeMspFiles = @()
+    $unsafeMspFiles = @()
+    $totalSize = 0
+    $safeSize = 0
+
+    foreach ($msp in $mspFiles) {
+      $totalSize += $msp.Length
+      
+      # Check if this MSP is referenced by installed patches
+      $isReferenced = $installedPatches.ContainsKey($msp.Name)
+      
+      # Additional safety checks
+      $isRecent = $msp.LastWriteTime -gt (Get-Date).AddDays(-30)  # Modified in last 30 days
+      $isLarge = $msp.Length -gt 50MB  # Larger than 50MB (might be important)
+      
+      if (-not $isReferenced -and -not $isRecent -and -not $isLarge) {
+        $safeMspFiles += $msp
+        $safeSize += $msp.Length
+      } else {
+        $unsafeMspFiles += $msp
+      }
+    }
+
+    return @{
+      TotalFiles = $mspFiles.Count
+      TotalSizeGB = [math]::Round($totalSize / 1GB, 2)
+      SafeToDeleteFiles = $safeMspFiles
+      SafeToDeleteSizeGB = [math]::Round($safeSize / 1GB, 2)
+      UnsafeFiles = $unsafeMspFiles
+      ReferencedPatches = $installedPatches.Count
+    }
+    
+  } catch {
+    Write-Warning "Error analyzing MSP files: $($_.Exception.Message)"
+    return @()
+  }
+}
+
 function Get-BootDriveCleanupOpportunities {
   Write-Host ""
   Write-Host "=== BOOT DRIVE SPACE ANALYSIS ===" -ForegroundColor Cyan
@@ -933,6 +1242,32 @@ function Get-BootDriveCleanupOpportunities {
             Action = "Clean-TempFiles"
             Path = $env:TEMP
           }
+        }
+      }
+
+      # Check Windows Installer MSP files
+      $mspAnalysis = Get-InstallerMspFiles
+      if ($mspAnalysis -and $mspAnalysis.SafeToDeleteSizeGB -gt 0.1) { # Only show if > 100MB
+        $cleanupOpportunities += @{
+          Type = "InstallerMSP"
+          Description = "Remove old Windows Installer patch files (MSP)"
+          SizeGB = $mspAnalysis.SafeToDeleteSizeGB
+          Action = "Clean-InstallerMSP"
+          Data = $mspAnalysis
+          Path = "$env:WINDIR\Installer"
+        }
+      }
+
+      # Check Package Cache files
+      $packageCacheAnalysis = Get-PackageCacheFiles
+      if ($packageCacheAnalysis -and $packageCacheAnalysis.SafeToDeleteSizeGB -gt 0.1) { # Only show if > 100MB
+        $cleanupOpportunities += @{
+          Type = "PackageCache"
+          Description = "Remove old cached installer files (MSI/EXE)"
+          SizeGB = $packageCacheAnalysis.SafeToDeleteSizeGB
+          Action = "Clean-PackageCache"
+          Data = $packageCacheAnalysis
+          Path = "$env:ProgramData\Package Cache"
         }
       }
 
@@ -1040,6 +1375,68 @@ function Execute-BootDriveCleanup {
           }
           Write-Host ("  Cleaned temporary files" -f $opp.Path) -ForegroundColor Green
         }
+        "Clean-InstallerMSP" {
+          $mspData = $opp.Data
+          $safeFiles = $mspData.SafeToDeleteFiles
+          $deletedCount = 0
+          
+          Write-Host ("  Found {0} MSP files ({1}GB total), {2} safe to delete ({3}GB)" -f 
+            $mspData.TotalFiles, $mspData.TotalSizeGB, $safeFiles.Count, $mspData.SafeToDeleteSizeGB) -ForegroundColor Cyan
+          
+          foreach ($file in $safeFiles) {
+            try {
+              Remove-Item $file.FullName -Force -ErrorAction Stop
+              $totalCleaned += $file.Length
+              $deletedCount++
+              Write-Host ("    Removed: {0} ({1:N1}MB)" -f $file.Name, ($file.Length / 1MB)) -ForegroundColor Green
+            } catch {
+              Write-Host ("    Failed to remove: {0} - {1}" -f $file.Name, $_.Exception.Message) -ForegroundColor Yellow
+            }
+          }
+          
+          Write-Host ("  Successfully removed {0} MSP files" -f $deletedCount) -ForegroundColor Green
+        }
+        "Clean-PackageCache" {
+          $cacheData = $opp.Data
+          $safeFiles = $cacheData.SafeToDeleteFiles
+          $deletedCount = 0
+          
+          Write-Host ("  Found {0} cached files ({1}GB total), {2} safe to delete ({3}GB)" -f 
+            $cacheData.TotalFiles, $cacheData.TotalSizeGB, $safeFiles.Count, $cacheData.SafeToDeleteSizeGB) -ForegroundColor Cyan
+          
+          # Group by directory for cleaner deletion
+          $filesByDir = $safeFiles | Group-Object { Split-Path $_.Path -Parent }
+          
+          foreach ($dirGroup in $filesByDir) {
+            $dirPath = $dirGroup.Name
+            $filesInDir = $dirGroup.Group
+            
+            Write-Host ("    Cleaning directory: {0}" -f (Split-Path $dirPath -Leaf)) -ForegroundColor Yellow
+            
+            foreach ($fileInfo in $filesInDir) {
+              try {
+                Remove-Item $fileInfo.Path -Force -ErrorAction Stop
+                $totalCleaned += ($fileInfo.SizeMB * 1MB)
+                $deletedCount++
+                Write-Host ("      Removed: {0} ({1}MB) - {2}" -f $fileInfo.Name, $fileInfo.SizeMB, $fileInfo.Reason) -ForegroundColor Green
+              } catch {
+                Write-Host ("      Failed to remove: {0} - {1}" -f $fileInfo.Name, $_.Exception.Message) -ForegroundColor Yellow
+              }
+            }
+            
+            # Try to remove empty directories
+            try {
+              if ((Get-ChildItem $dirPath -ErrorAction SilentlyContinue).Count -eq 0) {
+                Remove-Item $dirPath -Force -ErrorAction Stop
+                Write-Host ("      Removed empty directory: {0}" -f (Split-Path $dirPath -Leaf)) -ForegroundColor Green
+              }
+            } catch {
+              # Ignore directory removal errors
+            }
+          }
+          
+          Write-Host ("  Successfully removed {0} cached installer files" -f $deletedCount) -ForegroundColor Green
+        }
       }
     } catch {
       Write-Host ("  Error cleaning {0}: {1}" -f $opp.Type, $_.Exception.Message) -ForegroundColor Red
@@ -1125,6 +1522,9 @@ if ($CleanupSpace) {
   return
 }
 
+# ----- Display Configuration -----
+Get-DisplayInfo
+
 # --- Optional service assessment (pre-step) ---
 $assessScript = Join-Path $projectRoot "assess_services.ps1"
 if ($Profile -and $ServiceAssess -and (Test-Path $assessScript)) {
@@ -1169,9 +1569,9 @@ if ($Profiles.$effectiveProfile) {
 Write-Output "Assessing services for $($effectiveProfile) mode..."
 $serviceAssessment = Assess-Services -Mode $effectiveProfile
 
-# Show service recommendations
-$unneededServices = $serviceAssessment | Where-Object { $_.Recommendation -like "Unneeded generally*" }
-$modeSpecificServices = $serviceAssessment | Where-Object { $_.Recommendation -like "Not needed for $($effectiveProfile)*" }
+# Show service recommendations - ONLY for services that are actually running
+$unneededServices = $serviceAssessment | Where-Object { $_.Recommendation -like "Unneeded generally*" -and $_.State -eq "Running" }
+$modeSpecificServices = $serviceAssessment | Where-Object { $_.Recommendation -like "Not needed for $($effectiveProfile)*" -and $_.State -eq "Running" }
 
 if ($unneededServices.Count -gt 0 -or $modeSpecificServices.Count -gt 0) {
   Write-Host ""
@@ -1179,7 +1579,7 @@ if ($unneededServices.Count -gt 0 -or $modeSpecificServices.Count -gt 0) {
   
   if ($unneededServices.Count -gt 0) {
     Write-Host ""
-    Write-Host "Services that are generally unneeded (consider setting to Manual and stopping):" -ForegroundColor Yellow
+    Write-Host "Services that are generally unneeded and currently running:" -ForegroundColor Yellow
     $unneededServices | Sort-Object RAMMB -Descending | ForEach-Object {
       $ramInfo = if ($_.RAMMB -gt 0) { " (RAM: {0} MB)" -f $_.RAMMB } else { "" }
       Write-Host ("  {0,-30} [{1}] - {2}{3}" -f $_.DisplayName, $_.Name, $_.Description, $ramInfo)
@@ -1188,13 +1588,18 @@ if ($unneededServices.Count -gt 0 -or $modeSpecificServices.Count -gt 0) {
   
   if ($modeSpecificServices.Count -gt 0) {
     Write-Host ""
-    Write-Host "Services not needed for $($effectiveProfile) mode (consider stopping during this session):" -ForegroundColor Yellow
+    Write-Host "Services not needed for $($effectiveProfile) mode (currently running):" -ForegroundColor Yellow
     $modeSpecificServices | Sort-Object RAMMB -Descending | ForEach-Object {
       $ramInfo = if ($_.RAMMB -gt 0) { " (RAM: {0} MB)" -f $_.RAMMB } else { "" }
       Write-Host ("  {0,-30} [{1}] - {2}{3}" -f $_.DisplayName, $_.Name, $_.Description, $ramInfo)
     }
   }
   
+  Write-Host ""
+} else {
+  Write-Host ""
+  Write-Host "=== SERVICE RECOMMENDATIONS ===" -ForegroundColor Cyan
+  Write-Host "No unneeded or mode-specific services are currently running." -ForegroundColor Green
   Write-Host ""
 }
 
@@ -1212,35 +1617,84 @@ if ($ProfileCfg -and $ProfileCfg.StopServicesPre) {
 $plannedKills = Plan-KillsByPatterns -Patterns $usedKillList
 $planPath = Join-Path $outDir ("planned-kills_{0}.csv" -f $effectiveProfile)
 $plannedKills | Export-Csv $planPath -NoTypeInformation
-Write-Output ("Planned kills: {0} (see {1})" -f $plannedKills.Count, $planPath)
 
-# Display planned kills inline with RAM usage and context
+# Display planned kills with similar UI to service recommendations
+Write-Host ""
+Write-Host "=== PROCESS RECOMMENDATIONS ===" -ForegroundColor Cyan
+
 if ($plannedKills.Count -gt 0) {
-  Write-Output ""
-  Write-Output "Planned processes to terminate:"
-  Write-Output "================================="
-  $plannedKills | Sort-Object Name | ForEach-Object {
-    $cpuInfo = if ($_.CPUPercent -gt 0) { " CPU: {0,5}%" -f $_.CPUPercent } else { " CPU:  0.00%" }
-    $permissionIcon = if ($_.PromptUser) { " [USER PERMISSION NEEDED]" } else { "" }
-    $line = ("{0,-30} PID: {1,6} RAM: {2,8}{3}{4}" -f $_.Name, $_.PID, $_.RAMMB, $cpuInfo, $permissionIcon)
-    if ($_.Context) { $line += $_.Context }
-    Write-Output $line
+  Write-Host "Processes matching kill patterns for $($effectiveProfile) mode:" -ForegroundColor Yellow
+  Write-Host ""
+  
+  # Group by permission requirement
+  $autoKillProcs = $plannedKills | Where-Object { -not $_.PromptUser }
+  $permissionProcs = $plannedKills | Where-Object { $_.PromptUser }
+  
+  if ($autoKillProcs.Count -gt 0) {
+    Write-Host "Processes that can be automatically terminated:" -ForegroundColor Green
+    $autoKillProcs | Sort-Object RAMMB -Descending | ForEach-Object {
+      $cpuInfo = if ($_.CPUPercent -gt 0) { " CPU: {0}%" -f $_.CPUPercent } else { "" }
+      $ramInfo = " RAM: $($_.RAMMB) MB"
+      $contextInfo = if ($_.Context) { " - $($_.Context)" } else { "" }
+      Write-Host ("  {0,-25} [PID: {1,6}]{2}{3}{4}" -f $_.Name, $_.PID, $ramInfo, $cpuInfo, $contextInfo)
+    }
+    Write-Host ""
   }
-  Write-Output ""
+  
+  if ($permissionProcs.Count -gt 0) {
+    Write-Host "Processes requiring user permission:" -ForegroundColor Yellow
+    $permissionProcs | Sort-Object RAMMB -Descending | ForEach-Object {
+      $cpuInfo = if ($_.CPUPercent -gt 0) { " CPU: {0}%" -f $_.CPUPercent } else { "" }
+      $ramInfo = " RAM: $($_.RAMMB) MB"
+      $contextInfo = if ($_.Context) { " - $($_.Context)" } else { "" }
+      $reasonInfo = if ($_.Reason) { "`n      Reason: $($_.Reason)" } else { "" }
+      Write-Host ("  {0,-25} [PID: {1,6}]{2}{3}{4}{5}" -f $_.Name, $_.PID, $ramInfo, $cpuInfo, $contextInfo, $reasonInfo)
+    }
+    Write-Host ""
+  }
+  
+  Write-Host ("Total: {0} processes identified for termination ({1} saved to {2})" -f $plannedKills.Count, $plannedKills.Count, (Split-Path $planPath -Leaf)) -ForegroundColor Gray
 } else {
-  Write-Output "No processes match the kill patterns."
+  Write-Host "No processes match the kill patterns for $($effectiveProfile) mode." -ForegroundColor Green
+}
+Write-Host ""
+
+# Service actions (for unneeded and mode-specific services)
+$serviceActions = @()
+
+# Combine both unneeded and mode-specific services, but only those that are actually running
+$servicesToConsider = @()
+if ($unneededServices.Count -gt 0) {
+  $servicesToConsider += $unneededServices | Where-Object { $_.State -eq "Running" }
+}
+if ($modeSpecificServices.Count -gt 0) {
+  $servicesToConsider += $modeSpecificServices | Where-Object { $_.State -eq "Running" }
 }
 
-# Service actions (for unneeded services)
-$serviceActions = @()
-if (-not $DryRun -and $unneededServices.Count -gt 0) {
+if (-not $DryRun -and $servicesToConsider.Count -gt 0) {
   Write-Host ""
   Write-Host "=== SERVICE ACTIONS ===" -ForegroundColor Cyan
+  Write-Host ("Found {0} running services that can be optimized." -f $servicesToConsider.Count) -ForegroundColor Yellow
+  Write-Host ""
   
-  foreach ($svc in $unneededServices) {
+  # Check if service exists and is accessible before adding to action list
+  foreach ($svc in $servicesToConsider) {
     $svcName = $svc.Name
+    
+    # Verify service actually exists and is accessible
+    $actualService = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+    if (-not $actualService) {
+      # Service doesn't exist on this system, skip it
+      continue
+    }
+    
     $shouldFlipStartup = ($svc.StartType -ne "Manual")
     $shouldStop = ($svc.State -eq "Running")
+    
+    # Skip if there's nothing to do
+    if (-not $shouldFlipStartup -and -not $shouldStop) {
+      continue
+    }
     
     $doFlip = $false
     $doStop = $false
@@ -1250,6 +1704,10 @@ if (-not $DryRun -and $unneededServices.Count -gt 0) {
       Write-Host ("Service: {0}  [{1}]" -f $svc.DisplayName, $svcName) -ForegroundColor Yellow
       Write-Host ("Desc   : {0}" -f $svc.Description)
       Write-Host ("Start  : {0}   State: {1}" -f $svc.StartType, $svc.State)
+      if ($svc.RAMMB -gt 0) {
+        Write-Host ("RAM    : {0} MB" -f $svc.RAMMB) -ForegroundColor Red
+      }
+      
       if ($shouldFlipStartup) {
         $ans1 = Read-Host "Set StartupType to Manual? (y/N)"
         if ($ans1 -match '^(y|yes)$') { $doFlip = $true }
@@ -1259,19 +1717,28 @@ if (-not $DryRun -and $unneededServices.Count -gt 0) {
         if ($ans2 -match '^(y|yes)$') { $doStop = $true }
       }
     } else {
-      # Non-interactive: apply all recommended changes
-      $doFlip = $shouldFlipStartup
-      $doStop = $shouldStop
+      # Non-interactive: only stop running services, don't change startup type without permission
+      $doFlip = $false  # Don't change startup type automatically
+      $doStop = $shouldStop  # Do stop running services
     }
     
-    $serviceActions += [pscustomobject]@{
-      Name = $svcName
-      DisplayName = $svc.DisplayName
-      DoFlip = $doFlip
-      DoStop = $doStop
-      ShouldFlip = $shouldFlipStartup
-      ShouldStop = $shouldStop
+    # Only add to action list if we're actually going to do something
+    if ($doFlip -or $doStop) {
+      $serviceActions += [pscustomobject]@{
+        Name = $svcName
+        DisplayName = $svc.DisplayName
+        DoFlip = $doFlip
+        DoStop = $doStop
+        ShouldFlip = $shouldFlipStartup
+        ShouldStop = $shouldStop
+      }
     }
+  }
+  
+  if ($serviceActions.Count -eq 0) {
+    Write-Host "No service actions will be performed." -ForegroundColor Gray
+  } else {
+    Write-Host ("Prepared {0} service actions." -f $serviceActions.Count) -ForegroundColor Green
   }
 }
 
@@ -1331,48 +1798,73 @@ if (-not $DryRun) {
 # Execute service changes first (services before processes)
 if (-not $DryRun -and $serviceActions.Count -gt 0) {
   Write-Output ""
-  Write-Output "=== SERVICE CHANGES PLANNED ==="
-  Write-Output ("The following {0} service changes will be made:" -f $serviceActions.Count)
+  Write-Output "=== EXECUTING SERVICE CHANGES ===" -ForegroundColor Cyan
+  Write-Output ("Applying {0} service changes..." -f $serviceActions.Count)
+  Write-Output ""
   
   $serviceCount = 0
+  $successCount = 0
+  $failCount = 0
+  
   foreach ($action in $serviceActions) {
     $serviceCount++
-    Write-Output ("[{0}/{1}] Processing {2}..." -f $serviceCount, $serviceActions.Count, $action.DisplayName)
     $svcName = $action.Name
-    $flipOk = $false
-    $stopOk = $false
-    $flipErr = ""; $stopErr = ""
+    $actionTaken = $false
+    
+    # Build action description
+    $actions = @()
+    if ($action.DoFlip) { $actions += "set to Manual" }
+    if ($action.DoStop) { $actions += "stop" }
+    $actionDesc = $actions -join " and "
+    
+    Write-Output ("[{0}/{1}] {2} [{3}]..." -f $serviceCount, $serviceActions.Count, $action.DisplayName, $svcName)
     
     if ($action.DoFlip) {
       try {
         Set-Service -Name $svcName -StartupType Manual -ErrorAction Stop
-        $flipOk = $true
-        Write-Output ("Set {0} startup type to Manual" -f $action.DisplayName)
+        Write-Output ("  ✓ Set startup type to Manual" -f $action.DisplayName) -ForegroundColor Green
+        $actionTaken = $true
       } catch {
         try {
-          & sc.exe config $svcName start= demand | Out-Null
-          $flipOk = $true
-          Write-Output ("Set {0} startup type to Manual (via sc.exe)" -f $action.DisplayName)
+          & sc.exe config $svcName start= demand 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Output ("  ✓ Set startup type to Manual (via sc.exe)") -ForegroundColor Green
+            $actionTaken = $true
+          } else {
+            Write-Warning ("  ✗ Could not set startup type to Manual")
+            $failCount++
+          }
         } catch {
-          $flipErr = $_.Exception.Message
-          Write-Warning ("Could not set {0} to Manual: {1}" -f $action.DisplayName, $flipErr)
+          Write-Warning ("  ✗ Could not set startup type to Manual: $($_.Exception.Message)")
+          $failCount++
         }
       }
     }
     
     if ($action.DoStop) {
       try {
-        Stop-Service -Name $svcName -Force -ErrorAction Stop
-        $stopOk = $true
-        Write-Output ("Stopped {0}" -f $action.DisplayName)
+        # Check if service is still running
+        $svcStatus = Get-Service -Name $svcName -ErrorAction Stop
+        if ($svcStatus.Status -eq 'Running') {
+          Stop-Service -Name $svcName -Force -ErrorAction Stop
+          Write-Output ("  ✓ Stopped service") -ForegroundColor Green
+          $actionTaken = $true
+        } else {
+          Write-Output ("  ℹ Service already stopped") -ForegroundColor Gray
+        }
       } catch {
-        $stopErr = $_.Exception.Message
-        Write-Warning ("Could not stop {0}: {1}" -f $action.DisplayName, $stopErr)
+        Write-Warning ("  ✗ Could not stop service: $($_.Exception.Message)")
+        $failCount++
       }
+    }
+    
+    if ($actionTaken) {
+      $successCount++
     }
   }
   
-  Write-Output "Service changes complete."
+  Write-Output ""
+  Write-Output ("Service changes complete: {0} successful, {1} failed" -f $successCount, $failCount) -ForegroundColor $(if ($failCount -eq 0) { "Green" } else { "Yellow" })
 }
 
 # Execute process termination
@@ -1433,28 +1925,31 @@ if ($Capture) {
   Write-Output "Capture is opt-in. Skipping typeperf (use -Capture to enable)."
 }
 
-# ----- Services / PID mapping outputs -----
-Write-Output ""
-Write-Output "=== GENERATING REPORTS ==="
-Write-Output "Dumping running services and PID map..."
-Get-Service | Where-Object {$_.Status -eq 'Running'} |
-  Select-Object Name, DisplayName, Status, StartType |
-  Export-Csv (Join-Path $outDir "running-services.csv") -NoTypeInformation
+# ----- Services / PID mapping outputs and report generation -----
+# Only generate reports if capture was actually performed
+if ($Capture) {
+  Write-Output ""
+  Write-Output "=== GENERATING REPORTS ==="
+  Write-Output "Dumping running services and PID map..."
+  Get-CimInstance Win32_Service | Where-Object {$_.State -eq 'Running'} |
+    Select-Object Name, DisplayName, State, StartMode |
+    Export-Csv (Join-Path $outDir "running-services.csv") -NoTypeInformation
 
-Get-CimInstance Win32_Service |
-  Where-Object { $_.ProcessId -ne 0 } |
-  Select-Object Name, DisplayName, ProcessId |
-  Export-Csv (Join-Path $outDir "service-process-map.csv") -NoTypeInformation
+  Get-CimInstance Win32_Service |
+    Where-Object { $_.ProcessId -ne 0 } |
+    Select-Object Name, DisplayName, ProcessId |
+    Export-Csv (Join-Path $outDir "service-process-map.csv") -NoTypeInformation
 
-# ----- Transform + report -----
-if (Test-Path $csvInput) {
-  Write-Output "Transforming CSV and building report..."
-  py (Join-Path $projectRoot "perf_transform_cli.py")
-  py (Join-Path $projectRoot "make_report.py")
-  $reportPath = Join-Path $outDir "report.html"
-  if (Test-Path $reportPath) { Invoke-Item $reportPath }
-} else {
-  Write-Output "No capture CSV present; skipping transform/report."
+  # ----- Transform + report -----
+  if (Test-Path $csvInput) {
+    Write-Output "Transforming CSV and building report..."
+    py (Join-Path $projectRoot "perf_transform_cli.py")
+    py (Join-Path $projectRoot "make_report.py")
+    $reportPath = Join-Path $outDir "report.html"
+    if (Test-Path $reportPath) { Invoke-Item $reportPath }
+  } else {
+    Write-Output "No capture CSV present; skipping transform/report."
+  }
 }
 
 # ----- Optional restore -----

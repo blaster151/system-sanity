@@ -116,11 +116,6 @@ def main():
     transposed.sort(key=lambda r: to_float(r[-1]) or 0.0, reverse=True)
     write_csv(os.path.join(outdir,"perf_transposed.csv"),
               ["Counter"] + times + ["Average"], transposed)
-    # Sort enhanced stats by average value (descending)
-    enhanced_stats_rows.sort(key=lambda r: to_float(r[4]) or 0.0, reverse=True)
-
-    write_csv(os.path.join(outdir,"perf_stats.csv"),
-              ["PID","Counter","Min","Max","Average"], enhanced_stats_rows)
 
     # --- Latest snapshot (flatten) + PID correlation
     latest_i  = len(times)-1
@@ -171,6 +166,13 @@ def main():
                 pid = str(pid_by_instance[inst])
 
             enhanced_stats_rows.append([pid, label, f"{mn:.6f}", f"{mx:.6f}", f"{avg:.6f}"])
+
+    # Sort enhanced stats by average value (descending)
+    enhanced_stats_rows.sort(key=lambda r: to_float(r[4]) or 0.0, reverse=True)
+    
+    # Write enhanced stats
+    write_csv(os.path.join(outdir,"perf_stats.csv"),
+              ["PID","Counter","Min","Max","Average"], enhanced_stats_rows)
 
     # --- Top CPU labeled with services
     cpu_rows = []
