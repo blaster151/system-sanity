@@ -2,7 +2,17 @@
   "gaming": {
     "StopServicesPre": [
       "SQLSERVERAGENT",
-      "MSSQLSERVER"
+      "MSSQLSERVER",
+      "SysMain",
+      "DiagTrack",
+      "WSearch",
+      "Spooler",
+      "PcaSvc",
+      "WaasMedicSvc",
+      "CDPUserSvc",
+      "UnistoreSvc",
+      "DoSvc",
+      "WpnService"
     ],
     "KillProcesses": [
       {
@@ -130,7 +140,12 @@
     ]
   },
   "dev": {
-    "StopServicesPre": [],
+    "StopServicesPre": [
+      "DiagTrack",
+      "WaasMedicSvc",
+      "Spooler",
+      "WpnService"
+    ],
     "KillProcesses": [
       {
         "pattern": "msedge.exe",

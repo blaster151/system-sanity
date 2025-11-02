@@ -751,10 +751,28 @@ function Confirm-KillChrome {
   param([object[]]$Planned, [switch]$Force)
   $chromeHits = $Planned | Where-Object { $_.Name -like "chrome*" }
   if (-not $chromeHits -or $Force) { return $true }
+  
   Write-Host ""
-  Write-Host "Chrome processes detected:" -ForegroundColor Yellow
-  $chromeHits | Format-Table Name,PID,RAMMB -AutoSize | Out-Host
-  $q = Read-Host "Kill ALL Chrome processes now? (y/N)"
+  Write-Host "=== CHROME BROWSER PROCESSES ===" -ForegroundColor Cyan
+  Write-Host ("Found {0} Chrome processes consuming {1:N2} MB total" -f $chromeHits.Count, ($chromeHits | ForEach-Object { [double]$_.RAMMB.Replace(' MB','') } | Measure-Object -Sum).Sum) -ForegroundColor Yellow
+  Write-Host ""
+  
+  # Show summary by type
+  $mainProcesses = $chromeHits | Where-Object { $_.Context -like "*browser*" -or (-not $_.Context) }
+  $rendererProcesses = $chromeHits | Where-Object { $_.Context -like "*renderer*" -or $_.Context -like "*tab*" }
+  
+  if ($mainProcesses) {
+    Write-Host "Main Browser Processes:" -ForegroundColor Green
+    $mainProcesses | Format-Table Name, PID, RAMMB, Context -AutoSize | Out-Host
+  }
+  
+  if ($rendererProcesses.Count -gt 0) {
+    Write-Host ("+ {0} renderer/tab processes" -f $rendererProcesses.Count) -ForegroundColor Gray
+  }
+  
+  Write-Host ""
+  Write-Host "This will close ALL Chrome processes (including all tabs and extensions)." -ForegroundColor Yellow
+  $q = Read-Host "Kill ALL Chrome processes? [y/N]"
   return ($q -match '^(y|yes)$')
 }
 
@@ -765,6 +783,76 @@ function Restore-ChromeSession {
   } catch {
     Write-Warning "Failed to relaunch Chrome with --restore-last-session"
   }
+}
+
+function Manage-MemoryCompression {
+  param([switch]$Disable, [switch]$Enable)
+  
+  Write-Host ""
+  Write-Host "=== MEMORY COMPRESSION MANAGEMENT ===" -ForegroundColor Cyan
+  
+  # Check current status
+  try {
+    $memCompression = Get-MMAgent -ErrorAction Stop
+    $currentStatus = $memCompression.MemoryCompression
+    
+    Write-Host ("Current Memory Compression Status: {0}" -f $(if ($currentStatus) { "ENABLED" } else { "DISABLED" })) -ForegroundColor $(if ($currentStatus) { "Yellow" } else { "Green" })
+    
+    if ($Disable -and $currentStatus) {
+      Write-Host "Disabling Memory Compression..." -ForegroundColor Yellow
+      Write-Host "Note: This can improve gaming performance by reducing CPU overhead from compression." -ForegroundColor Gray
+      
+      try {
+        Disable-MMAgent -MemoryCompression -ErrorAction Stop
+        Write-Host "✓ Memory Compression disabled successfully" -ForegroundColor Green
+        Write-Host "  This setting persists until re-enabled or system restart." -ForegroundColor Gray
+        
+        # Track permanent change
+        $revertCommand = "Enable-MMAgent -MemoryCompression"
+        Track-PermanentChange -ChangeType "MemoryCompression" -Description "Disabled Memory Compression for gaming performance" -RevertCommand $revertCommand
+        
+        return $true
+      } catch {
+        Write-Warning ("Failed to disable Memory Compression: {0}" -f $_.Exception.Message)
+        return $false
+      }
+    } elseif ($Enable -and -not $currentStatus) {
+      Write-Host "Enabling Memory Compression..." -ForegroundColor Yellow
+      
+      try {
+        Enable-MMAgent -MemoryCompression -ErrorAction Stop
+        Write-Host "✓ Memory Compression enabled successfully" -ForegroundColor Green
+        return $true
+      } catch {
+        Write-Warning ("Failed to enable Memory Compression: {0}" -f $_.Exception.Message)
+        return $false
+      }
+    } elseif ($Disable -and -not $currentStatus) {
+      Write-Host "Memory Compression is already disabled." -ForegroundColor Green
+      return $true
+    } elseif ($Enable -and $currentStatus) {
+      Write-Host "Memory Compression is already enabled." -ForegroundColor Green
+      return $true
+    } else {
+      Write-Host ""
+      Write-Host "Memory Compression impacts:" -ForegroundColor Yellow
+      Write-Host "  • Reduces RAM usage by compressing memory pages" -ForegroundColor Gray
+      Write-Host "  • Uses CPU cycles for compression/decompression" -ForegroundColor Gray
+      Write-Host "  • Can cause performance spikes during gameplay" -ForegroundColor Gray
+      Write-Host "  • Recommended: DISABLE for gaming, ENABLE for normal use" -ForegroundColor Gray
+      Write-Host ""
+      
+      $choice = Read-Host "Disable Memory Compression for better gaming performance? [y/N]"
+      if ($choice -match '^(y|yes)$') {
+        return Manage-MemoryCompression -Disable
+      }
+    }
+  } catch {
+    Write-Warning ("Could not query Memory Compression status: {0}" -f $_.Exception.Message)
+    return $false
+  }
+  
+  return $false
 }
 
 function Manage-WindowsWidgets {
@@ -1742,25 +1830,40 @@ if (-not $DryRun -and $servicesToConsider.Count -gt 0) {
   }
 }
 
-# Confirmation prompt (unless -DryRun)
-$selectedToKill = $plannedKills
-if (-not $DryRun -and $plannedKills.Count -gt 0) {
+# Separate Chrome processes from other processes for separate handling
+$chromeProcesses = $plannedKills | Where-Object { $_.Name -like "chrome*" }
+$nonChromeProcesses = $plannedKills | Where-Object { $_.Name -notlike "chrome*" }
+
+# Handle Chrome confirmation FIRST (separate decision)
+$okToKillChrome = $true
+$selectedChromeProcesses = @()
+if (-not $DryRun -and $chromeProcesses.Count -gt 0 -and -not $ForceChrome) {
+  $okToKillChrome = Confirm-KillChrome -Planned $chromeProcesses -Force:$ForceChrome
+  if ($okToKillChrome) {
+    $selectedChromeProcesses = $chromeProcesses
+  }
+} elseif ($chromeProcesses.Count -gt 0) {
+  $selectedChromeProcesses = $chromeProcesses
+}
+
+# Confirmation prompt for non-Chrome processes (unless -DryRun)
+$selectedToKill = @()
+if (-not $DryRun -and $nonChromeProcesses.Count -gt 0) {
   Write-Output ""
-  $confirm = Read-Host "Proceed with service changes and process termination? [Y/n]"
+  $confirm = Read-Host "Proceed with service changes and process termination (non-Chrome processes)? [Y/n]"
   if ($confirm -match '^(n|no)$') {
     Write-Output "Service changes and process termination cancelled by user."
     $selectedToKill = @()
     $serviceActions = @()
   } else {
-    # Separate processes that need permission from those that don't
-    $autoKillProcesses = $plannedKills | Where-Object { -not $_.PromptUser }
-    $permissionNeededProcesses = $plannedKills | Where-Object { $_.PromptUser }
+    # Separate processes that need permission from those that don't (excluding Chrome)
+    $autoKillProcesses = $nonChromeProcesses | Where-Object { -not $_.PromptUser }
+    $permissionNeededProcesses = $nonChromeProcesses | Where-Object { $_.PromptUser }
 
     # Get user permission for processes that need it
     $approvedProcesses = Get-UserPermissionForProcesses -ProcessesNeedingPermission $permissionNeededProcesses
 
-    # Use Out-GridView for remaining processes (those without promptUser flag)
-    $selectedToKill = @()
+    # Combine auto-kill and approved processes
     if ($autoKillProcesses.Count -gt 0) {
       $selectedToKill += $autoKillProcesses
     }
@@ -1779,20 +1882,25 @@ if (-not $DryRun -and $plannedKills.Count -gt 0) {
       }
     }
 
-    Write-Output ("User selected {0} processes to terminate." -f $selectedToKill.Count)
+    Write-Output ("User selected {0} non-Chrome processes to terminate." -f $selectedToKill.Count)
   }
+} elseif ($nonChromeProcesses.Count -gt 0) {
+  # Dry run mode - include all non-Chrome processes
+  $selectedToKill = $nonChromeProcesses
 }
 
-# Handle Windows Widgets (before Chrome confirmation)
+# Combine Chrome and non-Chrome selections for later processing
+$allSelectedProcesses = $selectedToKill + $selectedChromeProcesses
+
+# Handle Windows Widgets
 $widgetsDisabled = $false
 if (-not $DryRun) {
   $widgetsDisabled = Manage-WindowsWidgets -Apply:$ServiceApply -PromptEach:$ServicePromptEach
 }
 
-# Confirm Chrome specifically (unless -ForceChrome or -DryRun)
-$okToKillChrome = $true
-if (-not $DryRun) {
-  $okToKillChrome = Confirm-KillChrome -Planned $selectedToKill -Force:$ForceChrome
+# Handle Memory Compression for gaming profile
+if (-not $DryRun -and $effectiveProfile -eq "gaming") {
+  Manage-MemoryCompression -Disable
 }
 
 # Execute service changes first (services before processes)
@@ -1869,43 +1977,51 @@ if (-not $DryRun -and $serviceActions.Count -gt 0) {
 
 # Execute process termination
 if (-not $DryRun) {
-  if ($selectedToKill.Count -gt 0) {
+  $totalToKill = $selectedToKill.Count + $selectedChromeProcesses.Count
+  
+  if ($totalToKill -gt 0) {
     Write-Output ""
-    Write-Output "=== EXECUTING PROCESS TERMINATION ==="
-    Write-Output ("Terminating {0} processes..." -f $selectedToKill.Count)
+    Write-Output "=== EXECUTING PROCESS TERMINATION ===" -ForegroundColor Cyan
+    Write-Output ("Terminating {0} total processes ({1} non-Chrome, {2} Chrome)..." -f $totalToKill, $selectedToKill.Count, $selectedChromeProcesses.Count)
+    Write-Output ""
     
-    $nonChrome = $selectedToKill | Where-Object { $_.Name -notlike "chrome*" }
-    $processCount = 0
-    foreach ($p in $nonChrome) {
-      $processCount++
-      Write-Output ("[{0}/{1}] Terminating {2} (PID: {3})..." -f $processCount, $nonChrome.Count, $p.Name, $p.PID)
-      try { 
-        Stop-Process -Id $p.PID -Force -ErrorAction Stop 
-        Write-Output ("Terminated {0} (PID: {1})" -f $p.Name, $p.PID)
-      } catch { 
-        Write-Warning ("Could not kill {0} ({1}): {2}" -f $p.Name, $p.PID, $_.Exception.Message) 
-      }
-    }
-    
-    if ($okToKillChrome) {
-      $chromes = $selectedToKill | Where-Object { $_.Name -like "chrome*" }
-      if ($chromes.Count -gt 0) {
-        Write-Output ("Terminating {0} Chrome processes..." -f $chromes.Count)
-        $chromeCount = 0
-      foreach ($p in $chromes) {
-          $chromeCount++
-          Write-Output ("[{0}/{1}] Terminating Chrome {2} (PID: {3})..." -f $chromeCount, $chromes.Count, $p.Name, $p.PID)
+    # Kill non-Chrome processes first
+    if ($selectedToKill.Count -gt 0) {
+      $processCount = 0
+      foreach ($p in $selectedToKill) {
+        $processCount++
+        Write-Output ("[{0}/{1}] Terminating {2} (PID: {3})..." -f $processCount, $selectedToKill.Count, $p.Name, $p.PID)
         try { 
           Stop-Process -Id $p.PID -Force -ErrorAction Stop 
-          Write-Output ("Terminated {0} (PID: {1})" -f $p.Name, $p.PID)
+          Write-Output ("  ✓ Terminated {0} (PID: {1})" -f $p.Name, $p.PID) -ForegroundColor Green
         } catch { 
-          Write-Warning ("Could not kill {0} ({1}): {2}" -f $p.Name, $p.PID, $_.Exception.Message) 
-          }
+          Write-Warning ("  ✗ Could not kill {0} ({1}): {2}" -f $p.Name, $p.PID, $_.Exception.Message) 
         }
       }
-    } else {
-      Write-Output "Skipped killing Chrome by user choice."
     }
+    
+    # Kill Chrome processes (if user approved)
+    if ($selectedChromeProcesses.Count -gt 0) {
+      Write-Output ""
+      Write-Output ("Terminating {0} Chrome processes..." -f $selectedChromeProcesses.Count) -ForegroundColor Yellow
+      $chromeCount = 0
+      foreach ($p in $selectedChromeProcesses) {
+        $chromeCount++
+        Write-Output ("[{0}/{1}] Terminating Chrome {2} (PID: {3})..." -f $chromeCount, $selectedChromeProcesses.Count, $p.Name, $p.PID)
+        try { 
+          Stop-Process -Id $p.PID -Force -ErrorAction Stop 
+          Write-Output ("  ✓ Terminated {0} (PID: {1})" -f $p.Name, $p.PID) -ForegroundColor Green
+        } catch { 
+          Write-Warning ("  ✗ Could not kill {0} ({1}): {2}" -f $p.Name, $p.PID, $_.Exception.Message) 
+        }
+      }
+    } elseif ($chromeProcesses.Count -gt 0) {
+      Write-Output ""
+      Write-Output "Chrome processes were skipped by user choice." -ForegroundColor Gray
+    }
+    
+    Write-Output ""
+    Write-Output ("Process termination complete: {0} processes killed" -f $totalToKill) -ForegroundColor Green
   }
 } else {
   Write-Output "DRY RUN: no services changed or processes terminated."
