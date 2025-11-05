@@ -127,6 +127,8 @@ function Get-DisplayInfo {
     $monitors = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue
     $videoControllers = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
     
+    $script:displayInfo = @()
+    
     if ($videoControllers) {
       $displayNum = 1
       foreach ($controller in $videoControllers) {
@@ -136,6 +138,18 @@ function Get-DisplayInfo {
           $refreshRate = $controller.CurrentRefreshRate
           $name = $controller.Name
           $adapterRAM = [math]::Round($controller.AdapterRAM / 1GB, 2)
+          $pixelCount = $width * $height
+          
+          # Store display info for later use
+          $script:displayInfo += @{
+            Number = $displayNum
+            Name = $name
+            Width = $width
+            Height = $height
+            RefreshRate = $refreshRate
+            PixelCount = $pixelCount
+            DeviceID = $controller.DeviceID
+          }
           
           Write-Host ("Display {0}: {1}" -f $displayNum, $name) -ForegroundColor Green
           Write-Host ("  Resolution: {0} x {1}" -f $width, $height) -ForegroundColor White
@@ -192,6 +206,126 @@ function Get-DisplayInfo {
   } catch {
     Write-Warning "Could not retrieve display information: $($_.Exception.Message)"
   }
+}
+
+function Offer-DisableSmallerDisplay {
+  # Only offer if we have exactly 2 displays and display info was collected
+  if (-not $script:displayInfo -or $script:displayInfo.Count -ne 2) {
+    return
+  }
+  
+  Write-Host ""
+  Write-Host "=== MULTI-MONITOR OPTIMIZATION ===" -ForegroundColor Cyan
+  
+  # Find the display with the smallest pixel count
+  $smaller = $null
+  $larger = $null
+  $minPixels = [double]::MaxValue
+  $maxPixels = 0
+  
+  foreach ($display in $script:displayInfo) {
+    if ($display.PixelCount -lt $minPixels) {
+      $minPixels = $display.PixelCount
+      $smaller = $display
+    }
+    if ($display.PixelCount -gt $maxPixels) {
+      $maxPixels = $display.PixelCount
+      $larger = $display
+    }
+  }
+  
+  Write-Host ("You have 2 displays connected:" -f "") -ForegroundColor White
+  
+  # Display them in their original order (by display number), but color-code by size
+  foreach ($display in ($script:displayInfo | Sort-Object -Property Number)) {
+    if ($display.PixelCount -eq $minPixels) {
+      Write-Host ("  Display {0}: {1}x{2} ({3:N0} pixels) ← smaller" -f $display.Number, $display.Width, $display.Height, $display.PixelCount) -ForegroundColor Yellow
+    } else {
+      Write-Host ("  Display {0}: {1}x{2} ({3:N0} pixels) ← larger" -f $display.Number, $display.Width, $display.Height, $display.PixelCount) -ForegroundColor Green
+    }
+  }
+  
+  Write-Host ""
+  
+  $prompt = "Disable the smaller display (Display {0}) for better gaming performance? [y/N]" -f $smaller.Number
+  $response = Read-Host $prompt
+  
+  if ($response -match '^(y|yes)$') {
+    try {
+      Write-Host ("Attempting to disable Display {0} ({1}x{2})..." -f $smaller.Number, $smaller.Width, $smaller.Height) -ForegroundColor Yellow
+      
+      # Try using nircmd if available (free tool from NirSoft)
+      $nircmdPath = Join-Path $env:TEMP "nircmd.exe"
+      $nircmdAvailable = Test-Path $nircmdPath
+      
+      if (-not $nircmdAvailable) {
+        # Try to find nircmd in common locations
+        $searchPaths = @(
+          "C:\Windows\System32\nircmd.exe",
+          "C:\Windows\nircmd.exe",
+          "$env:ProgramFiles\nircmd\nircmd.exe",
+          "$env:ProgramFiles(x86)\nircmd\nircmd.exe"
+        )
+        foreach ($path in $searchPaths) {
+          if (Test-Path $path) {
+            $nircmdPath = $path
+            $nircmdAvailable = $true
+            break
+          }
+        }
+      }
+      
+      $success = $false
+      
+      if ($nircmdAvailable) {
+        # nircmd can disable monitors: nircmd.exe setdisplay monitor:1 0 0 0
+        # Monitor index starts at 1
+        try {
+          $output = & $nircmdPath setdisplay "monitor:$($smaller.Number)" 0 0 0 2>&1
+          Start-Sleep -Milliseconds 500
+          Write-Host ("✓ Display {0} has been disabled using nircmd" -f $smaller.Number) -ForegroundColor Green
+          $success = $true
+        } catch {
+          Write-Host "nircmd method failed, trying alternative..." -ForegroundColor Gray
+        }
+      }
+      
+      if (-not $success) {
+        # Try using DisplaySwitch with specific mode
+        # If the larger display is Display 2, we want "external" mode
+        # If the larger display is Display 1, we want "internal" mode
+        $displaySwitchPath = "$env:windir\System32\DisplaySwitch.exe"
+        
+        if (Test-Path $displaySwitchPath) {
+          # Determine which mode to use based on which display is larger
+          if ($larger.Number -eq 1) {
+            # Keep Display 1, disable Display 2
+            & $displaySwitchPath /internal | Out-Null
+            Write-Host ("✓ Switched to internal display (Display 1 only)" -f $smaller.Number) -ForegroundColor Green
+            $success = $true
+          } elseif ($larger.Number -eq 2) {
+            # Keep Display 2, disable Display 1
+            & $displaySwitchPath /external | Out-Null
+            Write-Host ("✓ Switched to external display (Display 2 only)" -f $smaller.Number) -ForegroundColor Green
+            $success = $true
+          }
+        }
+      }
+      
+      if ($success) {
+        Write-Host ("  Display {0} is now disabled. To re-enable: Win+P or Display Settings" -f $smaller.Number) -ForegroundColor Gray
+      } else {
+        Write-Host ("✗ Could not automatically disable the display" -f $smaller.Number) -ForegroundColor Yellow
+      }
+      
+    } catch {
+      Write-Warning "Error during display disable attempt: $($_.Exception.Message)"
+    }
+  } else {
+    Write-Host "Keeping both displays enabled" -ForegroundColor Gray
+  }
+  
+  Write-Host ""
 }
 
 function Get-ProcessWindowTitle {
@@ -1612,6 +1746,11 @@ if ($CleanupSpace) {
 
 # ----- Display Configuration -----
 Get-DisplayInfo
+
+# Offer to disable smaller display for gaming/dev modes
+if ($Profile -and ($Profile -eq "gaming" -or $Profile -eq "dev")) {
+  Offer-DisableSmallerDisplay
+}
 
 # --- Optional service assessment (pre-step) ---
 $assessScript = Join-Path $projectRoot "assess_services.ps1"
