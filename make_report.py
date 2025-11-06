@@ -11,7 +11,6 @@ def read_csv(p):
 top   = read_csv("top_cpu_labeled.csv")
 snap  = read_csv("latest_snapshot.csv")
 stats = read_csv("perf_stats.csv")           # <<< compact Min/Max/Avg table
-trans = read_csv("perf_transposed.csv")      # kept in case you still want full matrix
 
 def table_html(title, rows, freeze_first=False):
     if not rows: return f"<h2>{html.escape(title)}</h2><p><em>No data</em></p>"
@@ -50,13 +49,30 @@ html_doc="""<!doctype html><meta charset="utf-8"><title>System Sanity Report</ti
 </style>
 <h1>System Sanity Report</h1>
 <div class="meta">Generated """ + html.escape(ts) + """ — Source: <code>""" + html.escape(outdir) + """</code></div>
-<p class="hint">Click a column to sort. Double-click header to auto-fit. Drag resize handles on headers to resize columns. First column is frozen in Stats and Transposed.</p>
+<p class="hint">Click a column to sort. Double-click header to auto-fit. Drag resize handles on headers to resize columns. First column (PID) is frozen in Stats table.</p>
 """ + table_html("Top CPU (latest, with Services)", top) + """
-""" + table_html("Compact Stats (PID / Counter / Min / Max / Average)", stats, freeze_first=True) + """
-""" + table_html("Perf Transposed (raw samples; Average rightmost)", trans, freeze_first=True) + """
+""" + table_html("Compact Stats (PID / Service / Counter / Min / Max / Average)", stats, freeze_first=True) + """
 <script>
+// Combined sorting and resizing functionality
+let isDragging = false;
+let startX = 0;
+let startWidth = 0;
+let currentResizeHandle = null;
+
 document.querySelectorAll('table.tbl th').forEach((th,idx)=>{
-  th.addEventListener('click',()=>{
+  th.style.position = 'relative';
+  
+  // Add resize handle (except for first column if you want)
+  const handle = document.createElement('div');
+  handle.className = 'resize-handle';
+  th.appendChild(handle);
+
+  // Sorting - click on header (but not on resize handle)
+  th.addEventListener('click',(e)=>{
+    // Don't sort if clicking on resize handle
+    if (e.target.classList.contains('resize-handle')) return;
+    if (isDragging) return;
+    
     const tb=th.closest('table').querySelector('tbody');
     const rows=[...tb.querySelectorAll('tr')];
     const num=v=>/^\\s*-?\\d+(\\.\\d+)?\\s*$/.test(v)?parseFloat(v):v.toLowerCase();
@@ -70,31 +86,13 @@ document.querySelectorAll('table.tbl th').forEach((th,idx)=>{
     });
     rows.forEach(r=>tb.appendChild(r));
   });
-});
-</script>
-"""
-
-# Add column resizing JavaScript
-resize_js = """
-// Column resizing functionality
-let isDragging = false;
-let startX = 0;
-let startWidth = 0;
-
-document.querySelectorAll('table.tbl th').forEach((th,idx)=>{
-  if (idx === 0) return; // Skip first column (frozen PID column)
-
-  // Add resize handle
-  const handle = document.createElement('div');
-  handle.className = 'resize-handle';
-  th.style.position = 'relative';
-  th.appendChild(handle);
 
   // Handle mousedown on resize handle
   handle.addEventListener('mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();
     isDragging = true;
+    currentResizeHandle = handle;
     startX = e.clientX;
     startWidth = th.offsetWidth;
     handle.classList.add('dragging');
@@ -103,7 +101,10 @@ document.querySelectorAll('table.tbl th').forEach((th,idx)=>{
   });
 
   // Double-click for auto-fit
-  th.addEventListener('dblclick', () => {
+  th.addEventListener('dblclick', (e) => {
+    // Don't auto-fit if clicking on resize handle
+    if (e.target.classList.contains('resize-handle')) return;
+    
     const table = th.closest('table');
     const colIndex = Array.from(th.parentElement.children).indexOf(th);
     const cells = table.querySelectorAll(`tbody tr td:nth-child(${colIndex + 1})`);
@@ -124,7 +125,7 @@ document.querySelectorAll('table.tbl th').forEach((th,idx)=>{
       document.body.removeChild(tempDiv);
     });
 
-    const newWidth = Math.max(80, maxWidth + 16); // min 80px, add padding
+    const newWidth = Math.max(80, maxWidth + 16);
     th.style.width = newWidth + 'px';
     table.querySelectorAll(`td:nth-child(${colIndex + 1})`).forEach(td => {
       td.style.width = newWidth + 'px';
@@ -137,12 +138,11 @@ document.addEventListener('mousemove', (e) => {
   if (!isDragging) return;
 
   const deltaX = e.clientX - startX;
-  const newWidth = Math.max(50, startWidth + deltaX); // min 50px
+  const newWidth = Math.max(50, startWidth + deltaX);
 
-  const th = document.querySelector('.resize-handle.dragging').parentElement;
+  const th = currentResizeHandle.parentElement;
   th.style.width = newWidth + 'px';
 
-  // Apply to all cells in this column
   const colIndex = Array.from(th.parentElement.children).indexOf(th) + 1;
   th.closest('table').querySelectorAll(`td:nth-child(${colIndex})`).forEach(td => {
     td.style.width = newWidth + 'px';
@@ -153,12 +153,15 @@ document.addEventListener('mouseup', () => {
   if (!isDragging) return;
 
   isDragging = false;
-  document.querySelector('.resize-handle.dragging')?.classList.remove('dragging');
+  if (currentResizeHandle) {
+    currentResizeHandle.classList.remove('dragging');
+    currentResizeHandle = null;
+  }
   document.body.style.cursor = '';
   document.body.style.userSelect = '';
 });
+</script>
 """
 
-html_doc += f"<script>{resize_js}</script>"
 with open(os.path.join(outdir,"report.html"),"w",encoding="utf-8") as f: f.write(html_doc)
 print("Wrote: out/report.html")

@@ -38,7 +38,10 @@ def normalize_width(rows, width):
     return [row + [""]*(width - len(row)) for row in rows]
 
 def parse_process_label(lbl):
-    m = re.match(r'^\\Process\((.*?)\)\\(.*)$', lbl.strip())
+    # Handle both formats: "\Process(...)\Metric" and "\\MACHINE\Process(...)\Metric"
+    m = re.match(r'^\\\\.*?\\Process\((.*?)\)\\(.*)$', lbl.strip())
+    if not m:
+        m = re.match(r'^\\Process\((.*?)\)\\(.*)$', lbl.strip())
     return (m.group(1), m.group(2)) if m else (None, lbl.strip())
 
 def write_csv(path, header, rows):
@@ -130,14 +133,29 @@ def main():
             latest_rows.append([latest_ts, "Process", inst, metric, val])
             if metric == "ID Process":
                 v = to_float(val)
-                if v is not None: pid_by_instance[inst] = int(v)
+                if v is not None: 
+                    pid_by_instance[inst] = int(v)
         else:
             latest_rows.append([latest_ts, "Counter", "", label, val])
 
     write_csv(os.path.join(outdir,"latest_snapshot.csv"),
               ["Time","Kind","Instance","Metric","Value"], latest_rows)
 
-    # --- Enhanced stats with PIDs for process-specific metrics
+    # --- Load service-to-PID mapping first (used by both stats and top CPU)
+    svc_by_pid = {}
+    if os.path.exists(svcmap):
+        with open(svcmap,"r",newline="",encoding="utf-8",errors="ignore") as f:
+            rdr = csv.DictReader(f)
+            for r in rdr:
+                try: pid = int(r.get("ProcessId") or r.get("PID") or "")
+                except: continue
+                name = (r.get("Name") or "").strip()
+                disp = (r.get("DisplayName") or "").strip()
+                svc_by_pid.setdefault(pid, {"names":set(),"disps":set()})
+                if name: svc_by_pid[pid]["names"].add(name)
+                if disp: svc_by_pid[pid]["disps"].add(disp)
+
+    # --- Enhanced stats with PIDs and Service Names
     enhanced_stats_rows = []
     meaningful_metrics = [
         "% Processor Time", "Working Set", "Private Bytes", "Virtual Bytes",
@@ -162,17 +180,31 @@ def main():
 
             # For process-specific metrics, add PID if available
             pid = ""
-            if inst is not None and inst in pid_by_instance:
-                pid = str(pid_by_instance[inst])
+            svc_names = ""
+            if inst is not None:
+                # Check if we have a PID for this instance
+                if inst in pid_by_instance:
+                    pid = str(pid_by_instance[inst])
+                else:
+                    # Try without instance number suffix (e.g., "chrome#1" -> "chrome")
+                    base_inst = inst.split('#')[0]
+                    if base_inst in pid_by_instance:
+                        pid = str(pid_by_instance[base_inst])
+                
+                # Get service names for this PID
+                if pid:
+                    pid_int = int(pid)
+                    if pid_int in svc_by_pid:
+                        svc_names = ", ".join(sorted(svc_by_pid[pid_int]["names"]))
 
-            enhanced_stats_rows.append([pid, label, f"{mn:.6f}", f"{mx:.6f}", f"{avg:.6f}"])
+            enhanced_stats_rows.append([pid, svc_names, label, f"{mn:.6f}", f"{mx:.6f}", f"{avg:.6f}"])
 
     # Sort enhanced stats by average value (descending)
-    enhanced_stats_rows.sort(key=lambda r: to_float(r[4]) or 0.0, reverse=True)
+    enhanced_stats_rows.sort(key=lambda r: to_float(r[5]) or 0.0, reverse=True)
     
     # Write enhanced stats
     write_csv(os.path.join(outdir,"perf_stats.csv"),
-              ["PID","Counter","Min","Max","Average"], enhanced_stats_rows)
+              ["PID","Service","Counter","Min","Max","Average"], enhanced_stats_rows)
 
     # --- Top CPU labeled with services
     cpu_rows = []
@@ -181,19 +213,6 @@ def main():
             cpu = to_float(val) or 0.0
             pid = pid_by_instance.get(inst)
             cpu_rows.append([inst, cpu, pid])
-
-    svc_by_pid = {}
-    if os.path.exists(svcmap):
-        with open(svcmap,"r",newline="",encoding="utf-8",errors="ignore") as f:
-            rdr = csv.DictReader(f)
-            for r in rdr:
-                try: pid = int(r.get("ProcessId") or r.get("PID") or "")
-                except: continue
-                name = (r.get("Name") or "").strip()
-                disp = (r.get("DisplayName") or "").strip()
-                svc_by_pid.setdefault(pid, {"names":set(),"disps":set()})
-                if name: svc_by_pid[pid]["names"].add(name)
-                if disp: svc_by_pid[pid]["disps"].add(disp)
 
     rows_out = []
     for inst, cpu, pid in cpu_rows:

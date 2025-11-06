@@ -35,6 +35,89 @@ $csvInput    = Join-Path $outDir "typeperf_SD.csv"
 $profilesPath = Join-Path $projectRoot "profiles.json"
 New-Item -Type Directory -Path $outDir -Force | Out-Null
 
+# ----- Paging file drive info -----
+try {
+  $pagefiles = Get-CimInstance -ClassName Win32_PageFileUsage -ErrorAction SilentlyContinue
+  if (-not $pagefiles) {
+    # fallback to registry if WMI doesn't return anything
+    $regPF = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name PagingFiles -ErrorAction SilentlyContinue).PagingFiles
+    if ($regPF) {
+      $pagefiles = @()
+      foreach ($entry in $regPF) {
+        # registry entry format: "C:\pagefile.sys 0 0"
+        $path = $entry -split '\s+' | Select-Object -First 1
+        $obj = [PSCustomObject]@{ Name = $path }
+        $pagefiles += $obj
+      }
+    }
+  }
+
+  if ($pagefiles) {
+    Write-Host ""
+    Write-Host "=== SYSTEM INFORMATION ===" -ForegroundColor Cyan
+    
+    # CPU Info
+    $cpuInfo = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cpuInfo) {
+      $cores = $cpuInfo.NumberOfCores
+      $logicalProcs = $cpuInfo.NumberOfLogicalProcessors
+      $cpuName = $cpuInfo.Name -replace '\s+', ' '
+      Write-Host ("CPU: {0}" -f $cpuName) -ForegroundColor Green
+      Write-Host ("  Physical Cores: {0}  |  Logical Processors (Virtual CPUs): {1}" -f $cores, $logicalProcs) -ForegroundColor White
+      Write-Host ("  Max CPU capacity in perf counters: {0}%" -f ($logicalProcs * 100)) -ForegroundColor White
+      Write-Host ""
+    }
+    
+    # Paging Files
+    Write-Host "Paging Files:" -ForegroundColor Cyan
+    foreach ($pf in $pagefiles) {
+      $path = $pf.Name
+      if (-not $path) { continue }
+      # Normalize possible UNC or device path
+      try {
+        $root = [System.IO.Path]::GetPathRoot($path)
+      } catch {
+        $root = $null
+      }
+      if (-not $root) {
+        if ($path -match '([A-Za-z]:)') { $root = $matches[1] + "\" } else { $root = $path.Substring(0,2) + "\" }
+      }
+      $driveLetter = $root.TrimEnd('\\')
+      $ld = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID = '{0}'" -f $driveLetter) -ErrorAction SilentlyContinue
+      if ($ld -and $ld.Size -gt 0) {
+        $freeGB = [math]::Round($ld.FreeSpace / 1GB, 2)
+        $totalGB = [math]::Round($ld.Size / 1GB, 2)
+        $pctFree = [math]::Round((($ld.FreeSpace / $ld.Size) * 100), 2)
+        
+        # Determine color based on free space percentage
+        $color = "Green"
+        $warning = ""
+        if ($pctFree -lt 10) {
+          $color = "Red"
+          $warning = "  ⚠️  CRITICAL - System instability likely!"
+        } elseif ($pctFree -lt 15) {
+          $color = "Yellow"
+          $warning = "  ⚠️  WARNING - Free up space soon!"
+        } elseif ($pctFree -lt 20) {
+          $color = "Yellow"
+          $warning = "  ⚠️  Low - Consider cleanup"
+        }
+        
+        Write-Host ("Paging file: {0}  Drive: {1}  Free: {2} GB / {3} GB  ({4}% free){5}" -f $path, $driveLetter, $freeGB, $totalGB, $pctFree, $warning) -ForegroundColor $color
+      } else {
+        Write-Host ("Paging file: {0}  Drive: {1}  (drive info unavailable)" -f $path, $driveLetter) -ForegroundColor Yellow
+      }
+    }
+    Write-Host ""
+  } else {
+    Write-Host "" 
+    Write-Host "Paging file: not found via WMI or registry." -ForegroundColor DarkGray
+    Write-Host ""
+  }
+} catch {
+  Write-Warning ("Could not determine paging file drive: {0}" -f $_.Exception.Message)
+}
+
 # ----- Helpers -----
 function Load-Profiles {
   param([string]$Path)
@@ -76,11 +159,20 @@ function Stop-ServicesInOrder {
   if (-not $Services) { return }
   foreach ($svc in $Services) {
     try {
-      $s = Get-Service -Name $svc -ErrorAction Stop
-      if ($s.Status -ne 'Stopped') {
-        Write-Output ("Stopping service: {0}" -f $svc)
-        Stop-Service -Name $svc -Force -ErrorAction Stop
-        $s.WaitForStatus('Stopped','00:00:20')
+      # Support wildcards (e.g., OneSyncSvc*)
+      $matchingServices = Get-Service -Name $svc -ErrorAction SilentlyContinue
+      if (-not $matchingServices) {
+        # Service doesn't exist on this system - skip silently
+        continue
+      }
+      
+      # Handle both single service and array of services (from wildcard)
+      foreach ($service in @($matchingServices)) {
+        if ($service.Status -ne 'Stopped') {
+          Write-Output ("Stopping service: {0}" -f $service.Name)
+          Stop-Service -Name $service.Name -Force -ErrorAction Stop
+          $service.WaitForStatus('Stopped','00:00:20')
+        }
       }
     } catch {
       Write-Warning ("Could not stop service {0} : {1}" -f $svc, $_.Exception.Message)
@@ -93,11 +185,20 @@ function Start-ServicesInOrder {
   if (-not $Services) { return }
   foreach ($svc in $Services) {
     try {
-      $s = Get-Service -Name $svc -ErrorAction Stop
-      if ($s.Status -ne 'Running') {
-        Write-Output ("Starting service: {0}" -f $svc)
-        Start-Service -Name $svc -ErrorAction Stop
-        $s.WaitForStatus('Running','00:00:20')
+      # Support wildcards (e.g., OneSyncSvc*)
+      $matchingServices = Get-Service -Name $svc -ErrorAction SilentlyContinue
+      if (-not $matchingServices) {
+        # Service doesn't exist on this system - skip silently
+        continue
+      }
+      
+      # Handle both single service and array of services (from wildcard)
+      foreach ($service in @($matchingServices)) {
+        if ($service.Status -ne 'Running') {
+          Write-Output ("Starting service: {0}" -f $service.Name)
+          Start-Service -Name $service.Name -ErrorAction Stop
+          $service.WaitForStatus('Running','00:00:20')
+        }
       }
     } catch {
       Write-Warning ("Could not start service {0} : {1}" -f $svc, $_.Exception.Message)
@@ -322,7 +423,18 @@ function Offer-DisableSmallerDisplay {
       Write-Warning "Error during display disable attempt: $($_.Exception.Message)"
     }
   } else {
-    Write-Host "Keeping both displays enabled" -ForegroundColor Gray
+    # User said no - explicitly re-enable both displays
+    Write-Host "Re-enabling both displays..." -ForegroundColor Gray
+    try {
+      $displaySwitchPath = "$env:windir\System32\DisplaySwitch.exe"
+      if (Test-Path $displaySwitchPath) {
+        & $displaySwitchPath /extend | Out-Null
+        Start-Sleep -Milliseconds 500
+        Write-Host "✓ Both displays enabled (extended mode)" -ForegroundColor Green
+      }
+    } catch {
+      Write-Host "Both displays should already be enabled" -ForegroundColor Gray
+    }
   }
   
   Write-Host ""
@@ -917,6 +1029,55 @@ function Restore-ChromeSession {
   } catch {
     Write-Warning "Failed to relaunch Chrome with --restore-last-session"
   }
+}
+
+function Confirm-KillCode {
+  param([object[]]$Planned, [switch]$Force)
+  $codeHits = $Planned | Where-Object { $_.Name -like "Code*" }
+  if (-not $codeHits -or $Force) { return $true }
+  
+  Write-Host ""
+  Write-Host "=== VS CODE EDITOR PROCESSES ===" -ForegroundColor Cyan
+  Write-Host ("Found {0} VS Code processes consuming {1:N2} MB total" -f $codeHits.Count, ($codeHits | ForEach-Object { [double]$_.RAMMB.Replace(' MB','') } | Measure-Object -Sum).Sum) -ForegroundColor Yellow
+  Write-Host ""
+  
+  # Check for unsaved work
+  $hasUnsavedWork = $false
+  $workspaces = @()
+  
+  foreach ($proc in $codeHits) {
+    if ($proc.Context -like "*UNSAVED WORK*") {
+      $hasUnsavedWork = $true
+    }
+    if ($proc.Context -match "workspace: ([^)]+)") {
+      $workspaces += $matches[1]
+    }
+  }
+  
+  # Show main process info
+  $mainProcess = $codeHits | Where-Object { $_.Name -eq "Code.exe" } | Select-Object -First 1
+  if ($mainProcess) {
+    Write-Host "Main Editor Process:" -ForegroundColor Green
+    $mainProcess | Format-Table Name, PID, RAMMB, Context -AutoSize | Out-Host
+  }
+  
+  if ($codeHits.Count -gt 1) {
+    Write-Host ("+ {0} helper/extension processes" -f ($codeHits.Count - 1)) -ForegroundColor Gray
+  }
+  
+  if ($workspaces.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Open workspaces:" -ForegroundColor Yellow
+    $workspaces | Select-Object -Unique | ForEach-Object { Write-Host "  - $_" -ForegroundColor White }
+  }
+  
+  Write-Host ""
+  if ($hasUnsavedWork) {
+    Write-Host "⚠ UNSAVED WORK DETECTED - Files may not be saved!" -ForegroundColor Red
+  }
+  Write-Host "This will close ALL VS Code processes (including all windows and extensions)." -ForegroundColor Yellow
+  $q = Read-Host "Kill ALL VS Code processes? [y/N]"
+  return ($q -match '^(y|yes)$')
 }
 
 function Manage-MemoryCompression {
@@ -1969,9 +2130,10 @@ if (-not $DryRun -and $servicesToConsider.Count -gt 0) {
   }
 }
 
-# Separate Chrome processes from other processes for separate handling
+# Separate Chrome and Code processes from other processes for separate handling
 $chromeProcesses = $plannedKills | Where-Object { $_.Name -like "chrome*" }
-$nonChromeProcesses = $plannedKills | Where-Object { $_.Name -notlike "chrome*" }
+$codeProcesses = $plannedKills | Where-Object { $_.Name -like "Code*" }
+$otherProcesses = $plannedKills | Where-Object { $_.Name -notlike "chrome*" -and $_.Name -notlike "Code*" }
 
 # Handle Chrome confirmation FIRST (separate decision)
 $okToKillChrome = $true
@@ -1985,19 +2147,31 @@ if (-not $DryRun -and $chromeProcesses.Count -gt 0 -and -not $ForceChrome) {
   $selectedChromeProcesses = $chromeProcesses
 }
 
-# Confirmation prompt for non-Chrome processes (unless -DryRun)
+# Handle VS Code confirmation SECOND (separate decision)
+$okToKillCode = $true
+$selectedCodeProcesses = @()
+if (-not $DryRun -and $codeProcesses.Count -gt 0) {
+  $okToKillCode = Confirm-KillCode -Planned $codeProcesses
+  if ($okToKillCode) {
+    $selectedCodeProcesses = $codeProcesses
+  }
+} elseif ($codeProcesses.Count -gt 0) {
+  $selectedCodeProcesses = $codeProcesses
+}
+
+# Confirmation prompt for other processes (unless -DryRun)
 $selectedToKill = @()
-if (-not $DryRun -and $nonChromeProcesses.Count -gt 0) {
+if (-not $DryRun -and $otherProcesses.Count -gt 0) {
   Write-Output ""
-  $confirm = Read-Host "Proceed with service changes and process termination (non-Chrome processes)? [Y/n]"
+  $confirm = Read-Host "Proceed with service changes and process termination (other processes)? [Y/n]"
   if ($confirm -match '^(n|no)$') {
     Write-Output "Service changes and process termination cancelled by user."
     $selectedToKill = @()
     $serviceActions = @()
   } else {
-    # Separate processes that need permission from those that don't (excluding Chrome)
-    $autoKillProcesses = $nonChromeProcesses | Where-Object { -not $_.PromptUser }
-    $permissionNeededProcesses = $nonChromeProcesses | Where-Object { $_.PromptUser }
+    # Separate processes that need permission from those that don't (excluding Chrome and Code)
+    $autoKillProcesses = $otherProcesses | Where-Object { -not $_.PromptUser }
+    $permissionNeededProcesses = $otherProcesses | Where-Object { $_.PromptUser }
 
     # Get user permission for processes that need it
     $approvedProcesses = Get-UserPermissionForProcesses -ProcessesNeedingPermission $permissionNeededProcesses
@@ -2010,18 +2184,7 @@ if (-not $DryRun -and $nonChromeProcesses.Count -gt 0) {
       $selectedToKill += $approvedProcesses
     }
 
-    # Final selection via Out-GridView (optional refinement)
-    if ($selectedToKill.Count -gt 0) {
-      Write-Output "Opening process selection dialog for final review..."
-      $finalSelection = Pick-Processes-OGV -Planned $selectedToKill
-      if ($finalSelection.Count -gt 0) {
-        $selectedToKill = $finalSelection
-      } else {
-        $selectedToKill = @()
-      }
-    }
-
-    Write-Output ("User selected {0} non-Chrome processes to terminate." -f $selectedToKill.Count)
+    Write-Output ("Selected {0} other processes to terminate." -f $selectedToKill.Count)
   }
 } elseif ($nonChromeProcesses.Count -gt 0) {
   # Dry run mode - include all non-Chrome processes
@@ -2116,15 +2279,15 @@ if (-not $DryRun -and $serviceActions.Count -gt 0) {
 
 # Execute process termination
 if (-not $DryRun) {
-  $totalToKill = $selectedToKill.Count + $selectedChromeProcesses.Count
+  $totalToKill = $selectedToKill.Count + $selectedCodeProcesses.Count + $selectedChromeProcesses.Count
   
   if ($totalToKill -gt 0) {
     Write-Output ""
     Write-Output "=== EXECUTING PROCESS TERMINATION ===" -ForegroundColor Cyan
-    Write-Output ("Terminating {0} total processes ({1} non-Chrome, {2} Chrome)..." -f $totalToKill, $selectedToKill.Count, $selectedChromeProcesses.Count)
+    Write-Output ("Terminating {0} total processes ({1} other, {2} VS Code, {3} Chrome)..." -f $totalToKill, $selectedToKill.Count, $selectedCodeProcesses.Count, $selectedChromeProcesses.Count)
     Write-Output ""
     
-    # Kill non-Chrome processes first
+    # Kill other processes first
     if ($selectedToKill.Count -gt 0) {
       $processCount = 0
       foreach ($p in $selectedToKill) {
@@ -2137,6 +2300,26 @@ if (-not $DryRun) {
           Write-Warning ("  ✗ Could not kill {0} ({1}): {2}" -f $p.Name, $p.PID, $_.Exception.Message) 
         }
       }
+    }
+    
+    # Kill VS Code processes (if user approved)
+    if ($selectedCodeProcesses.Count -gt 0) {
+      Write-Output ""
+      Write-Output ("Terminating {0} VS Code processes..." -f $selectedCodeProcesses.Count) -ForegroundColor Yellow
+      $codeCount = 0
+      foreach ($p in $selectedCodeProcesses) {
+        $codeCount++
+        Write-Output ("[{0}/{1}] Terminating VS Code {2} (PID: {3})..." -f $codeCount, $selectedCodeProcesses.Count, $p.Name, $p.PID)
+        try { 
+          Stop-Process -Id $p.PID -Force -ErrorAction Stop 
+          Write-Output ("  ✓ Terminated {0} (PID: {1})" -f $p.Name, $p.PID) -ForegroundColor Green
+        } catch { 
+          Write-Warning ("  ✗ Could not kill {0} ({1}): {2}" -f $p.Name, $p.PID, $_.Exception.Message) 
+        }
+      }
+    } elseif ($codeProcesses.Count -gt 0) {
+      Write-Output ""
+      Write-Output "VS Code processes were skipped by user choice." -ForegroundColor Gray
     }
     
     # Kill Chrome processes (if user approved)

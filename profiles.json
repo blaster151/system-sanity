@@ -9,10 +9,32 @@
       "Spooler",
       "PcaSvc",
       "WaasMedicSvc",
-      "CDPUserSvc",
+      "CDPUserSvc*",
+      "cbdhsvc*",
+      "TokenBroker",
+      "seclogon",
       "UnistoreSvc",
       "DoSvc",
-      "WpnService"
+      "WpnService",
+      "WpnUserService*",
+      "ClickToRunSvc",
+      "gupdate",
+      "gupdatem",
+      "OneSyncSvc*",
+      "AdobeARMservice",
+      "DbxSvc",
+      "webthreatdefusersvc*",
+      "UserDataSvc*",
+      "UdkUserSvc*",
+      "PimIndexMaintenanceSvc*",
+      "NPSMSvc*",
+      "WavesSysSvc",
+      "Themes",
+      "ACCSvc",
+      "InstallService",
+      "PhoneSvc",
+      "UsoSvc",
+      "wuauserv"
     ],
     "KillProcesses": [
       {
@@ -51,24 +73,14 @@
         "reason": "Apple software updater"
       },
       {
-        "pattern": "GoogleUpdate*",
-        "promptUser": false,
-        "reason": "Google updater processes"
-      },
-      {
-        "pattern": "OfficeClickToRun*",
-        "promptUser": false,
-        "reason": "Office updater processes"
-      },
-      {
         "pattern": "MSOSync*",
         "promptUser": false,
         "reason": "Office sync processes"
       },
       {
-        "pattern": "OneDriveSetup*",
+        "pattern": "Wisprflow*",
         "promptUser": false,
-        "reason": "OneDrive setup processes"
+        "reason": "Wisprflow network/VPN process"
       },
       {
         "pattern": "Overwolf*",
@@ -129,6 +141,41 @@
         "pattern": "EdgeGameAssist*",
         "promptUser": false,
         "reason": "Edge Game Assist process - not needed"
+      },
+      {
+        "pattern": "Acrob*",
+        "promptUser": false,
+        "reason": "Adobe Acrobat processes - not needed for gaming"
+      },
+      {
+        "pattern": "ePowerBut*",
+        "promptUser": false,
+        "reason": "ASUS ePowerButton utility - not needed for gaming"
+      },
+      {
+        "pattern": "game*",
+        "promptUser": false,
+        "reason": "Game bar and game-related background processes"
+      },
+      {
+        "pattern": "xbox*",
+        "promptUser": false,
+        "reason": "Xbox services and background processes"
+      },
+      {
+        "pattern": "muse*",
+        "promptUser": false,
+        "reason": "MuseScore or other Muse-related processes"
+      },
+      {
+        "pattern": "GoogleFS*",
+        "promptUser": false,
+        "reason": "Google File Stream - not needed for gaming"
+      },
+      {
+        "pattern": "drop*",
+        "promptUser": false,
+        "reason": "Dropbox processes - not needed for gaming"
       }
     ],
     "StartServicesPost": [
@@ -143,8 +190,23 @@
     "StopServicesPre": [
       "DiagTrack",
       "WaasMedicSvc",
+      "CDPUserSvc*",
+      "cbdhsvc*",
+      "TokenBroker",
+      "seclogon",
       "Spooler",
-      "WpnService"
+      "WpnService",
+      "ClickToRunSvc",
+      "gupdate",
+      "gupdatem",
+      "WavesSysSvc",
+      "ACCSvc",
+      "InstallService",
+      "PhoneSvc",
+      "UsoSvc",
+      "wuauserv",
+      "OneSyncSvc*",
+      "AdobeARMservice"
     ],
     "KillProcesses": [
       {
@@ -183,24 +245,14 @@
         "reason": "Apple software updater"
       },
       {
-        "pattern": "GoogleUpdate*",
-        "promptUser": false,
-        "reason": "Google updater processes"
-      },
-      {
-        "pattern": "OfficeClickToRun*",
-        "promptUser": false,
-        "reason": "Office updater processes"
-      },
-      {
         "pattern": "MSOSync*",
         "promptUser": false,
         "reason": "Office sync processes"
       },
       {
-        "pattern": "OneDriveSetup*",
+        "pattern": "Wisprflow*",
         "promptUser": false,
-        "reason": "OneDrive setup processes"
+        "reason": "Wisprflow network/VPN process"
       },
       {
         "pattern": "Overwolf*",
@@ -236,6 +288,31 @@
         "pattern": "EdgeGameAssist*",
         "promptUser": false,
         "reason": "Edge Game Assist process - not needed"
+      },
+      {
+        "pattern": "Acrob*",
+        "promptUser": false,
+        "reason": "Adobe Acrobat processes - not needed for development"
+      },
+      {
+        "pattern": "ePowerBut*",
+        "promptUser": false,
+        "reason": "ASUS ePowerButton utility - not needed for development"
+      },
+      {
+        "pattern": "game*",
+        "promptUser": false,
+        "reason": "Game bar and game-related background processes"
+      },
+      {
+        "pattern": "xbox*",
+        "promptUser": false,
+        "reason": "Xbox services and background processes"
+      },
+      {
+        "pattern": "muse*",
+        "promptUser": false,
+        "reason": "MuseScore or other Muse-related processes"
       }
     ],
     "StartServicesPost": [],
