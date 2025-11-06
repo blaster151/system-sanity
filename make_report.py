@@ -12,6 +12,25 @@ top   = read_csv("top_cpu_labeled.csv")
 snap  = read_csv("latest_snapshot.csv")
 stats = read_csv("perf_stats.csv")           # <<< compact Min/Max/Avg table
 
+# Optional browser process map (for type breakdown)
+def read_browser_proc_map():
+  p = os.path.join(outdir, "browser-tabs-processes.csv")
+  if not os.path.exists(p):
+    return {}
+  out = {}
+  try:
+    with open(p, "r", newline="", encoding="utf-8", errors="ignore") as f:
+      rdr = csv.DictReader(f)
+      for r in rdr:
+        pid = (r.get("PID") or "").strip()
+        b = (r.get("Browser") or "").strip()
+        typ = (r.get("Type") or "").strip()
+        if pid and pid.isdigit():
+          out[int(pid)] = {"browser": b, "type": typ}
+  except Exception:
+    return {}
+  return out
+
 def table_html(title, rows, freeze_first=False):
   if not rows:
     return f"<h2>{html.escape(title)}</h2><p><em>No data</em></p>"
@@ -71,8 +90,79 @@ html_doc="""<!doctype html><meta charset="utf-8"><title>System Sanity Report</ti
 <h1>System Sanity Report</h1>
 <div class="meta">Generated """ + html.escape(ts) + """ — Source: <code>""" + html.escape(outdir) + """</code></div>
 <p class="hint">Click a column to sort. Double-click header to auto-fit. Drag resize handles on headers to resize columns. First column (PID) is frozen in Stats table.</p>
-""" + table_html("Top CPU (latest, with Services)", top) + """
-""" + table_html("Compact Stats (PID / Service / Counter / Min / Max / Average)", stats, freeze_first=True) + """
+"""
+# Aggregate: CPU by App (latest)
+try:
+  cpu_by_app = []
+  if top and len(top) > 1:
+    hdr = top[0]
+    # Expect columns: [Instance, PID, CPU_ProcTime, SvcNames, SvcDisplayNames]
+    inst_i = hdr.index("Instance") if "Instance" in hdr else 0
+    cpu_i  = hdr.index("CPU_ProcTime") if "CPU_ProcTime" in hdr else 2
+    groups = {}
+    for r in top[1:]:
+      if not r: continue
+      inst = (r[inst_i] or "").split('#')[0]
+      try:
+        cpu = float(r[cpu_i])
+      except:
+        cpu = 0.0
+      g = groups.get(inst)
+      if not g:
+        g = {"count":0, "cpu":0.0}
+        groups[inst] = g
+      g["count"] += 1
+      g["cpu"] += cpu
+    rows = [["App","ProcCount","TotalCPU_ProcTime"]]
+    for app, g in groups.items():
+      rows.append([app, str(g["count"]), f"{g['cpu']:.3f}"])
+    # Sort by Total CPU desc
+    rows_sorted = [rows[0]] + sorted(rows[1:], key=lambda x: float(x[2]), reverse=True)
+    html_doc += table_html("CPU by App (latest)", rows_sorted)
+except Exception:
+  pass
+
+# Aggregate: Browser CPU by Type (requires browser map)
+try:
+  browser_map = read_browser_proc_map()
+  if browser_map and top and len(top) > 1:
+    hdr = top[0]
+    pid_i = hdr.index("PID") if "PID" in hdr else 1
+    cpu_i = hdr.index("CPU_ProcTime") if "CPU_ProcTime" in hdr else 2
+    groups = {}
+    for r in top[1:]:
+      if not r: continue
+      pid = (r[pid_i] or "").strip()
+      try:
+        pid_i_val = int(pid)
+      except:
+        continue
+      m = browser_map.get(pid_i_val)
+      if not m: continue
+      key = (m.get("browser") or "Browser", m.get("type") or "Unknown")
+      try:
+        cpu = float(r[cpu_i])
+      except:
+        cpu = 0.0
+      g = groups.get(key)
+      if not g:
+        g = {"count":0, "cpu":0.0}
+        groups[key] = g
+      g["count"] += 1
+      g["cpu"] += cpu
+    rows = [["Browser","Type","ProcCount","TotalCPU_ProcTime"]]
+    for (browser, typ), g in groups.items():
+      rows.append([browser, typ, str(g["count"]), f"{g['cpu']:.3f}"])
+    rows_sorted = [rows[0]] + sorted(rows[1:], key=lambda x: float(x[3]), reverse=True)
+    html_doc += table_html("Browser CPU by Type (latest)", rows_sorted)
+except Exception:
+  pass
+
+# Original detailed tables
+html_doc += table_html("Top CPU (latest, with Services)", top)
+html_doc += table_html("Compact Stats (PID / Service / Counter / Min / Max / Average)", stats, freeze_first=True)
+
+html_doc += """
 <script>
 // Combined sorting and resizing functionality
 let isDragging = false;
