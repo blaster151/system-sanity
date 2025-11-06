@@ -48,6 +48,11 @@
         "reason": "Edge WebView processes - usually safe to kill (widgets, PWAs)"
       },
       {
+        "pattern": "msedge*",
+  "promptUser": false,
+        "reason": "Catch-all for Edge processes (future variants)"
+      },
+      {
         "pattern": "widg*",
         "promptUser": false,
         "reason": "Windows widgets - usually safe to kill"
@@ -176,6 +181,11 @@
         "pattern": "drop*",
         "promptUser": false,
         "reason": "Dropbox processes - not needed for gaming"
+      },
+      {
+        "pattern": "zoom*",
+        "promptUser": false,
+        "reason": "Zoom client/background helpers - safe to stop"
       }
     ],
     "StartServicesPost": [
@@ -218,6 +228,11 @@
         "pattern": "msedgewebview2.exe",
         "promptUser": false,
         "reason": "Edge WebView processes - usually safe to kill (widgets, PWAs)"
+      },
+      {
+        "pattern": "msedge*",
+  "promptUser": false,
+        "reason": "Catch-all for Edge processes (future variants)"
       },
       {
         "pattern": "widg*",
@@ -313,6 +328,11 @@
         "pattern": "muse*",
         "promptUser": false,
         "reason": "MuseScore or other Muse-related processes"
+      },
+      {
+        "pattern": "zoom*",
+        "promptUser": false,
+        "reason": "Zoom client/background helpers - safe to stop"
       }
     ],
     "StartServicesPost": [],
@@ -333,6 +353,11 @@
         "pattern": "msedgewebview2.exe",
         "promptUser": false,
         "reason": "Edge WebView processes - usually safe to kill (widgets, PWAs)"
+      },
+      {
+        "pattern": "msedge*",
+  "promptUser": false,
+        "reason": "Catch-all for Edge processes (future variants)"
       },
       {
         "pattern": "widg*",
@@ -398,6 +423,11 @@
         "pattern": "EdgeGameAssist*",
         "promptUser": false,
         "reason": "Edge Game Assist process - not needed"
+      },
+      {
+        "pattern": "zoom*",
+        "promptUser": false,
+        "reason": "Zoom client/background helpers - safe to stop"
       }
     ],
     "StartServicesPost": [],

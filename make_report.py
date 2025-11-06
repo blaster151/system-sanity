@@ -13,22 +13,29 @@ snap  = read_csv("latest_snapshot.csv")
 stats = read_csv("perf_stats.csv")           # <<< compact Min/Max/Avg table
 
 def table_html(title, rows, freeze_first=False):
-    if not rows: return f"<h2>{html.escape(title)}</h2><p><em>No data</em></p>"
-    head, data = rows[0], rows[1:]
-    thead="".join(f"<th>{html.escape(h)}</th>" for h in head)
-    body=[]
-    for r in data:
-        tds=[]
-        for i,c in enumerate(r):
-            cls=' class="firstcol"' if freeze_first and i==0 else ""
-            # Add visual indicator for empty PID cells
-            if freeze_first and i==0 and not c.strip():
-                cell_content = '<span style="color:#999; font-style:italic;">N/A</span>'
-            else:
-                cell_content = html.escape(c)
-            tds.append(f"<td{cls}>{cell_content}</td>")
-        body.append("<tr>"+"".join(tds)+"</tr>")
-    return f"<h2>{html.escape(title)}</h2><table class='tbl'><thead><tr>{thead}</tr></thead><tbody>{''.join(body)}</tbody></table>"
+  if not rows:
+    return f"<h2>{html.escape(title)}</h2><p><em>No data</em></p>"
+  head, data = rows[0], rows[1:]
+  thead = "".join(f"<th>{html.escape(h)}</th>" for h in head)
+  body = []
+  for r in data:
+    tds = []
+    for i, c in enumerate(r):
+      cls = ' class="firstcol"' if freeze_first and i == 0 else ""
+      # Add visual indicator for empty PID cells
+      c_str = str(c)
+      if freeze_first and i == 0 and not c_str.strip():
+        cell_content = '<span style="color:#999; font-style:italic;">N/A</span>'
+      else:
+        cell_content = html.escape(c_str)
+      tds.append(f"<td{cls}>{cell_content}</td>")
+    body.append("<tr>" + "".join(tds) + "</tr>")
+  # Tag Compact Stats tables (freeze_first=True) so we can size columns via CSS
+  tbl_class = "tbl stats" if freeze_first else "tbl"
+  return (
+    f"<h2>{html.escape(title)}</h2>"
+    f"<table class='{tbl_class}'><thead><tr>{thead}</tr></thead><tbody>{''.join(body)}</tbody></table>"
+  )
 
 ts=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 html_doc="""<!doctype html><meta charset="utf-8"><title>System Sanity Report</title>
@@ -42,6 +49,20 @@ html_doc="""<!doctype html><meta charset="utf-8"><title>System Sanity Report</ti
 .tbl tr:nth-child(even){background:#fafafa}
 .tbl td:nth-child(1){max-width:80px;text-align:center;font-weight:600;color:#333}
  .tbl td:nth-child(2){max-width:100px;white-space:nowrap;text-overflow:ellipsis}
+ /* Compact Stats column sizing: headers are [PID, Service, Counter, Min, Max, Average] */
+ table.tbl.stats th:nth-child(3), /* Counter */
+ table.tbl.stats td:nth-child(3){
+   min-width: 40ch; /* make Counter ~2x wider */
+   max-width: 72ch;
+ }
+ table.tbl.stats th:nth-child(4),
+ table.tbl.stats td:nth-child(4),
+ table.tbl.stats th:nth-child(5),
+ table.tbl.stats td:nth-child(5),
+ table.tbl.stats th:nth-child(6),
+ table.tbl.stats td:nth-child(6){
+   width: 9ch; /* tighten Min/Max/Average */
+ }
  .tbl th .resize-handle{position:absolute;top:0;right:0;width:3px;height:100%;background:linear-gradient(to bottom,transparent,transparent 4px,#666 4px,#666 6px,transparent 6px);cursor:col-resize;opacity:0;transition:opacity 0.2s}
  .tbl th:hover .resize-handle{opacity:1}
  .tbl th .resize-handle:hover,.tbl th .resize-handle.dragging{opacity:1;background:linear-gradient(to bottom,transparent,transparent 4px,#007acc 4px,#007acc 6px,transparent 6px)}
@@ -59,7 +80,7 @@ let startX = 0;
 let startWidth = 0;
 let currentResizeHandle = null;
 
-document.querySelectorAll('table.tbl th').forEach((th,idx)=>{
+document.querySelectorAll('table.tbl th').forEach((th)=>{
   th.style.position = 'relative';
   
   // Add resize handle (except for first column if you want)
@@ -69,22 +90,46 @@ document.querySelectorAll('table.tbl th').forEach((th,idx)=>{
 
   // Sorting - click on header (but not on resize handle)
   th.addEventListener('click',(e)=>{
-    // Don't sort if clicking on resize handle
-    if (e.target.classList.contains('resize-handle')) return;
-    if (isDragging) return;
-    
-    const tb=th.closest('table').querySelector('tbody');
-    const rows=[...tb.querySelectorAll('tr')];
-    const num=v=>/^\\s*-?\\d+(\\.\\d+)?\\s*$/.test(v)?parseFloat(v):v.toLowerCase();
-    const dir=th.dataset.dir=th.dataset.dir==='asc'?'desc':'asc';
+    if (e.target.classList.contains('resize-handle')) return; // ignore drag handle
+    if (isDragging) return; // don't trigger sort while resizing
+
+    const table = th.closest('table');
+    const tbody = table.querySelector('tbody');
+    if (!tbody) return;
+    // Column index relative to this table (not the page-wide header index)
+    const colIndex = Array.from(th.parentElement.children).indexOf(th);
+
+    // Determine column types from header text (PID, Min, Max, Average => numeric)
+    const headers = Array.from(table.querySelectorAll('thead th'));
+    const types = headers.map(h => {
+      const t = (h.textContent||'').trim().toLowerCase();
+      return (t==='pid' || t==='min' || t==='max' || t==='average') ? 'num' : 'text';
+    });
+
+    const dir = th.dataset.dir = (th.dataset.dir === 'asc') ? 'desc' : 'asc';
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+
+    function getText(tr, i){
+      const cell = tr.children[i];
+      return cell ? (cell.textContent||'').trim() : '';
+    }
+    function toVal(v, type){
+      if (type === 'num'){
+        const n = parseFloat(v.replace(/[^0-9.\-]/g,'').trim());
+        return isNaN(n) ? Number.NEGATIVE_INFINITY : n;
+      }
+      return v.toLowerCase();
+    }
+
     rows.sort((a,b)=>{
-      const ta=a.children[idx]?.textContent||'', tbv=b.children[idx]?.textContent||'';
-      const na=num(ta), nb=num(tbv);
-      if(na<nb) return dir==='asc'?-1:1;
-      if(na>nb) return dir==='asc'?1:-1;
+      const va = toVal(getText(a, colIndex), types[colIndex]||'text');
+      const vb = toVal(getText(b, colIndex), types[colIndex]||'text');
+      if (va < vb) return (dir==='asc') ? -1 : 1;
+      if (va > vb) return (dir==='asc') ? 1 : -1;
       return 0;
     });
-    rows.forEach(r=>tb.appendChild(r));
+
+    rows.forEach(r => tbody.appendChild(r));
   });
 
   // Handle mousedown on resize handle

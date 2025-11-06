@@ -13,7 +13,20 @@ function Get-ChromeTabInfo {
     param([int]$Port)
     
     try {
-        $response = Invoke-RestMethod -Uri "http://localhost:$Port/json" -ErrorAction Stop -TimeoutSec 2
+        # Try primary endpoint first, then fall back to /json/list for newer Chrome versions
+        $response = @()
+        try {
+            $response = Invoke-RestMethod -Uri "http://localhost:$Port/json" -ErrorAction Stop -TimeoutSec 2
+        } catch {
+            $response = @()
+        }
+        if (-not $response -or $response.Count -eq 0) {
+            try {
+                $response = Invoke-RestMethod -Uri "http://localhost:$Port/json/list" -ErrorAction Stop -TimeoutSec 2
+            } catch {
+                $response = @()
+            }
+        }
         
         $tabs = @()
         foreach ($item in $response) {

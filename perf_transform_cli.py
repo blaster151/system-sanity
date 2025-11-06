@@ -54,6 +54,9 @@ def main():
     outdir = os.path.join(here, "out")
     perf   = os.path.join(outdir, "typeperf_SD.csv")
     svcmap = os.path.join(outdir, "service-process-map.csv")
+    # Optional browser mapping artifacts created by chrome_debugger_extract.ps1
+    browser_proc_csv = os.path.join(outdir, "browser-tabs-processes.csv")
+    browser_tabs_csv = os.path.join(outdir, "browser-tabs.csv")
     if not os.path.exists(perf):
         print(f"ERROR: missing perf CSV: {perf}"); sys.exit(1)
 
@@ -155,7 +158,57 @@ def main():
                 if name: svc_by_pid[pid]["names"].add(name)
                 if disp: svc_by_pid[pid]["disps"].add(disp)
 
-    # --- Enhanced stats with PIDs and Service Names
+    # --- Build optional browser PID->details map
+    browser_by_pid = {}
+    # Process details: PID, Type (e.g., Chrome: renderer), RAMMB, CommandLine
+    if os.path.exists(browser_proc_csv):
+        try:
+            with open(browser_proc_csv, "r", newline="", encoding="utf-8", errors="ignore") as f:
+                rdr = csv.DictReader(f)
+                for r in rdr:
+                    pid = r.get("PID")
+                    if not pid: continue
+                    try:
+                        pid_i = int(pid)
+                    except:
+                        continue
+                    typ = (r.get("Type") or "").strip()
+                    browser_by_pid.setdefault(pid_i, {"types": set(), "hints": set()})
+                    if typ:
+                        browser_by_pid[pid_i]["types"].add(typ)
+        except Exception as e:
+            pass
+    # Tab details: ProcessID, Type (Web Page/Extension/Service Worker), Title/Details/URL
+    if os.path.exists(browser_tabs_csv):
+        try:
+            with open(browser_tabs_csv, "r", newline="", encoding="utf-8", errors="ignore") as f:
+                rdr = csv.DictReader(f)
+                for r in rdr:
+                    pid = r.get("ProcessID")
+                    if not pid: continue
+                    try:
+                        pid_i = int(pid)
+                    except:
+                        continue
+                    typ = (r.get("Type") or "").strip()
+                    title = (r.get("Title") or "").strip()
+                    details = (r.get("Details") or "").strip()
+                    domain = ""
+                    # Derive domain from Details like "Domain: example.com"
+                    if details.lower().startswith("domain:"):
+                        domain = details.split(":",1)[1].strip()
+                    hint_parts = []
+                    if typ: hint_parts.append(typ)
+                    if domain: hint_parts.append(domain)
+                    elif title: hint_parts.append(title)
+                    hint = ", ".join(hint_parts)
+                    if hint:
+                        browser_by_pid.setdefault(pid_i, {"types": set(), "hints": set()})
+                        browser_by_pid[pid_i]["hints"].add(hint)
+        except Exception as e:
+            pass
+
+    # --- Enhanced stats with PIDs and Service/Browser Names
     enhanced_stats_rows = []
     meaningful_metrics = [
         "% Processor Time", "Working Set", "Private Bytes", "Virtual Bytes",
@@ -191,11 +244,22 @@ def main():
                     if base_inst in pid_by_instance:
                         pid = str(pid_by_instance[base_inst])
                 
-                # Get service names for this PID
+                # Get service names or browser hints for this PID
                 if pid:
                     pid_int = int(pid)
                     if pid_int in svc_by_pid:
                         svc_names = ", ".join(sorted(svc_by_pid[pid_int]["names"]))
+                    elif pid_int in browser_by_pid:
+                        # Prefer concise browser hint (Type + Domain/Title)
+                        hints = browser_by_pid[pid_int].get("hints") or set()
+                        types = browser_by_pid[pid_int].get("types") or set()
+                        # Build a single short string
+                        pieces = []
+                        if types:
+                            pieces.append("/".join(sorted(types))[:60])
+                        if hints:
+                            pieces.append("; ".join(sorted(hints))[:80])
+                        svc_names = " | ".join([p for p in pieces if p])
 
             enhanced_stats_rows.append([pid, svc_names, label, f"{mn:.6f}", f"{mx:.6f}", f"{avg:.6f}"])
 

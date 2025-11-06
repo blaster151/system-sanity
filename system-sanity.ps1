@@ -2381,6 +2381,14 @@ if ($Capture) {
   # ----- Transform + report -----
   if (Test-Path $csvInput) {
     Write-Output "Transforming CSV and building report..."
+    # Optional: collect browser mappings for richer Chrome/Edge attribution (best-effort)
+    $chromeExtractor = Join-Path $projectRoot "chrome_debugger_extract.ps1"
+    if (Test-Path $chromeExtractor) {
+      try {
+        # Generate browser process map and, if remote debugging is enabled, tab details
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $chromeExtractor -OutputPath (Join-Path $outDir "browser-tabs.csv") | Out-Null
+      } catch { }
+    }
     py (Join-Path $projectRoot "perf_transform_cli.py")
     py (Join-Path $projectRoot "make_report.py")
     $reportPath = Join-Path $outDir "report.html"
